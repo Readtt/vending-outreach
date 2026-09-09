@@ -383,8 +383,8 @@ function GetStarted() {
         <li className="rounded-xl border border-border px-4 py-3">
           <span className="font-medium">2. Find some businesses.</span>
           <p className="mt-1 text-muted-foreground">
-            Search a town or ZIP code, pick the kinds of business you want, and
-            add the ones that look good.
+            Search a town, a ZIP code, or a postal code, pick the kinds of
+            business you want, and add the ones that look good.
           </p>
           <Button
             render={<Link href="/leads" />}

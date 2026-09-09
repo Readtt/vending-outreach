@@ -31,8 +31,8 @@ export default function LeadsPage() {
 
       {items.length === 0 ? (
         <EmptyState title="No businesses yet.">
-          Use <strong>Find businesses</strong> to search a town or ZIP code for
-          places nearby.
+          Use <strong>Find businesses</strong> to search a town, a ZIP code, or
+          a postal code for places nearby.
         </EmptyState>
       ) : (
         <LeadTable items={items} total={total} cap={cap} />

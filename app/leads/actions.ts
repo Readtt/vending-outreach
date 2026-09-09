@@ -39,7 +39,7 @@ export async function findLocationsAction(
 ): Promise<FindLocationsFormResult> {
   const place = input.place.trim()
   if (!place) {
-    throw new Error("Enter a city, state, or ZIP code to search.")
+    throw new Error("Enter a town, a ZIP code, or a postal code to search.")
   }
   const types = input.types.filter(isLeadType)
   if (types.length === 0) {
