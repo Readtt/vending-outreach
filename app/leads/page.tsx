@@ -14,7 +14,7 @@ export default function LeadsPage() {
   const { items, total, cap } = getLeadListData()
   const typeOptions = getBusinessTypeOptions()
   const heldCount = countLeads({ status: ["held"] })
-  const { countries } = getTargetingSettings()
+  const targeting = getTargetingSettings()
 
   return (
     <Page width="full">
@@ -23,10 +23,7 @@ export default function LeadsPage() {
         title="Leads"
         description="Every business found so far, and what has happened with each one."
         action={
-          <FindLocationsDialog
-            typeOptions={typeOptions}
-            defaultCountries={countries}
-          />
+          <FindLocationsDialog typeOptions={typeOptions} defaults={targeting} />
         }
       />
 

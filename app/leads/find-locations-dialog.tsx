@@ -23,6 +23,7 @@ import type {
   BusinessTypeOption,
   FindLocationsFormResult,
   OsmCandidate,
+  TargetingDefaults,
 } from "./types"
 
 type SearchState =
@@ -34,22 +35,27 @@ type SearchState =
 
 interface FindLocationsDialogProps {
   typeOptions: BusinessTypeOption[]
-  /** From Settings. The dialog starts here and can be changed per search. */
-  defaultCountries: Country[]
+  /**
+   * What Settings → "Who to find" says. The dialog opens on these and can be
+   * changed for one search without saving anything back — which is what the
+   * Settings copy has always promised, and what it did not do: every field
+   * here started from a hardcoded default and the saved values went unread.
+   */
+  defaults: TargetingDefaults
 }
 
 export function FindLocationsDialog({
   typeOptions,
-  defaultCountries,
+  defaults,
 }: FindLocationsDialogProps) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
-  const [place, setPlace] = useState("")
-  const [radiusMiles, setRadiusMiles] = useState(15)
+  const [place, setPlace] = useState(defaults.location)
+  const [radiusMiles, setRadiusMiles] = useState(defaults.radiusMiles)
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(
-    () => new Set(typeOptions.map((t) => t.id))
+    () => new Set(defaults.businessTypes)
   )
-  const [countries, setCountries] = useState<Country[]>(defaultCountries)
+  const [countries, setCountries] = useState<Country[]>(defaults.countries)
   const [state, setState] = useState<SearchState>({ status: "idle" })
   const [isPending, startTransition] = useTransition()
 

@@ -80,7 +80,7 @@ test("the country defaults to the US, so an old call site keeps its meaning", ()
 // ---------------------------------------------------------------------------
 
 /** Stands in for the `about` settings row. */
-function reader(about: Record<string, string>) {
+function reader(about: Record<string, string | undefined>) {
   return <T>(key: string): T | undefined =>
     key === "about" ? (about as unknown as T) : undefined
 }

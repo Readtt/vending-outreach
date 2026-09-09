@@ -49,13 +49,11 @@ export function TargetingSection({
                 </label>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Canadian businesses are emailed under CASL rather than CAN-SPAM,
-              which is stricter in two ways this handles for you: it only uses
-              an address the business published on its own website, and it puts
-              your phone number or website in the email next to your address.
-              Fill in your phone under &ldquo;About you&rdquo; if you tick
-              Canada.
+            <p className="max-w-prose text-xs text-muted-foreground">
+              Canada is emailed under CASL, which is stricter than the US rules
+              in two ways the app handles for you. If you tick it, fill in your
+              phone or website under &ldquo;About you&rdquo; — Canadian emails
+              need one next to your address.
             </p>
           </div>
 

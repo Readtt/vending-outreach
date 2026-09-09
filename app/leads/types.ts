@@ -15,6 +15,7 @@
  */
 
 import type { LeadStatus } from "@/lib/db"
+import type { Country } from "@/lib/geo"
 import type { LeadType, OsmCandidate } from "@/lib/osm"
 
 export type { OsmCandidate }
@@ -35,6 +36,14 @@ export interface LeadListItem {
 export interface BusinessTypeOption {
   id: LeadType
   label: string
+}
+
+/** Settings → "Who to find", as the search dialog needs it. */
+export interface TargetingDefaults {
+  location: string
+  radiusMiles: number
+  businessTypes: LeadType[]
+  countries: Country[]
 }
 
 export interface FindLocationsFormResult {

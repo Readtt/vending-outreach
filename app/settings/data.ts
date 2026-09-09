@@ -23,6 +23,7 @@ import {
 } from "@/lib/db"
 import { AI_ROLES, getRoleModel } from "@/lib/ai"
 import { isCountry, type Country } from "@/lib/geo"
+import { TARGET_TYPES, TYPE_LABELS, type LeadType } from "@/lib/osm"
 import {
   defaultLabelForKind,
   type MailboxPublic,
@@ -107,27 +108,25 @@ export function saveSendingSettings(settings: SendingSettings): void {
 // Targeting
 // ---------------------------------------------------------------------------
 
-export const BUSINESS_TYPES = [
-  { id: "gyms", label: "Gyms" },
-  { id: "car_dealerships", label: "Car dealerships" },
-  { id: "auto_repair", label: "Auto repair" },
-  { id: "warehouses", label: "Warehouses" },
-  { id: "offices", label: "Offices" },
-  { id: "clinics", label: "Clinics" },
-  { id: "hotels", label: "Hotels" },
-  { id: "self_storage", label: "Self-storage" },
-  { id: "laundromats", label: "Laundromats" },
-  { id: "apartments", label: "Apartments" },
-] as const
+/**
+ * The kinds of business a search can ask for.
+ *
+ * This used to be its own list of ten, with its own ids (`gyms`,
+ * `self_storage`) that did not match the twelve `LeadType` values the search
+ * dialog and `lib/osm.ts` speak (`gym`, `storage`). The two never lined up, so
+ * whatever was ticked here had no effect on any search — the dialog started
+ * with all twelve selected and ignored the setting entirely. One vocabulary
+ * now, straight from `lib/osm.ts`.
+ */
+export const BUSINESS_TYPES: readonly { id: LeadType; label: string }[] =
+  TARGET_TYPES.map((id) => ({ id, label: TYPE_LABELS[id] }))
 
-export type BusinessTypeId = (typeof BUSINESS_TYPES)[number]["id"]
+export type BusinessTypeId = LeadType
 
-export const BUSINESS_TYPE_IDS = BUSINESS_TYPES.map(
-  (t) => t.id
-) as BusinessTypeId[]
+export const BUSINESS_TYPE_IDS: readonly LeadType[] = TARGET_TYPES
 
 function isBusinessTypeId(value: string): value is BusinessTypeId {
-  return (BUSINESS_TYPE_IDS as string[]).includes(value)
+  return (TARGET_TYPES as readonly string[]).includes(value)
 }
 
 export interface TargetingSettings {
@@ -149,8 +148,8 @@ export const DEFAULT_TARGETING_SETTINGS: TargetingSettings = {
   // Canadian lead is emailed under CASL, which needs consent the US does not
   // ask for. Adding Canada should be something someone chose.
   countries: ["US"],
-  // All ten are sensible vending targets per the build spec's own ground
-  // truth (§10) — preselect everything rather than an arbitrary subset.
+  // Every type is a plausible vending site, so preselect them all rather
+  // than an arbitrary subset and let the user narrow it.
   businessTypes: [...BUSINESS_TYPE_IDS],
 }
 
