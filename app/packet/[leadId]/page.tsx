@@ -36,8 +36,8 @@ export default async function PacketPage({
             <Link href="/settings" className="underline underline-offset-2">
               Settings → About you
             </Link>{" "}
-            before you hand this out. US law requires a real postal address on
-            anything you leave behind.
+            before you hand this out. A real postal address belongs on anything
+            you leave behind.
           </div>
         )}
 
@@ -56,10 +56,14 @@ export default async function PacketPage({
         <section className="mt-6 flex flex-col gap-4 text-[15px] leading-relaxed">
           <p>
             {sender.company || "We"} would like to install a vending machine at{" "}
-            {packet.businessName}, at no cost to you.{" "}
+            {packet.businessName}
+            {/* "About you" asks for a phrase ("a share of what it sells, no
+                fees"), not a sentence, so it is joined with a comma. Ending
+                the sentence first and starting the next one lowercase is what
+                it used to do, and it read like a typo. */}
             {sender.offerTerms
-              ? sender.offerTerms
-              : "We own it, stock it, and keep it running, and you get a share of what it sells. No fees, nothing for you to manage."}
+              ? `, at no cost to you — ${sender.offerTerms}.`
+              : ", at no cost to you. We own it, stock it, and keep it running, and you get a share of what it sells. No fees, nothing for you to manage."}
           </p>
 
           {packet.fact && <p>We noticed: {packet.fact}</p>}

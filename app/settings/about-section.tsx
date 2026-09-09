@@ -45,16 +45,33 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="phone">Phone</Label>
-            <Input
-              id="phone"
-              name="phone"
-              type="tel"
-              defaultValue={settings.phone}
-              placeholder="(614) 555-0100"
-            />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="phone">Phone</Label>
+              <Input
+                id="phone"
+                name="phone"
+                type="tel"
+                defaultValue={settings.phone}
+                placeholder="(614) 555-0100"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="website">Website</Label>
+              <Input
+                id="website"
+                name="website"
+                type="url"
+                defaultValue={settings.website}
+                placeholder="https://buckeyevending.com"
+              />
+            </div>
           </div>
+          <p className="-mt-2 text-xs text-muted-foreground">
+            Canada wants one of these two next to your address on every email,
+            so fill in at least one if you are emailing Canadian businesses.
+            Nothing gets written for them until you do.
+          </p>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="address">Postal address</Label>
@@ -66,8 +83,8 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
               required
             />
             <p className="text-xs text-muted-foreground">
-              US law requires a real address on every sales email. A PO box is
-              fine. This is why nothing sends until you fill it in.
+              Both countries require a real address on every sales email. A PO
+              box is fine. This is why nothing sends until you fill it in.
             </p>
           </div>
 

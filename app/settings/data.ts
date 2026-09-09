@@ -242,6 +242,16 @@ export function getSettingsStatus(): SettingsStatus {
   }
   if (mailboxes.length === 0) missing.push("a mailbox")
   if (!about.address.trim()) missing.push("your business address")
+  // CASL wants a second way to reach you alongside the address, so composing
+  // for a Canadian lead refuses without one. Said here rather than discovered
+  // later, when a batch of Canadian drafts quietly fails to get written.
+  if (
+    getTargetingSettings().countries.includes("CA") &&
+    !about.phone.trim() &&
+    !about.website.trim()
+  ) {
+    missing.push("your phone or website (Canada asks for one)")
+  }
 
   const jobs = taskQueueSummary()
   return {

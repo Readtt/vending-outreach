@@ -368,8 +368,8 @@ function GetStarted() {
           <span className="font-medium">1. Fill in Settings.</span>
           <p className="mt-1 text-muted-foreground">
             You need an AI provider to write the emails, a Gmail account to send
-            them from, and your business address. US law requires that address
-            on every sales email.
+            them from, and your business address. Every sales email has to carry
+            a real postal address, in the US and in Canada both.
           </p>
           <Button
             render={<Link href="/settings" />}
