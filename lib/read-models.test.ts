@@ -22,7 +22,10 @@ process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
   closeDb,
+  dailyActivity,
   dashboardStats,
+  engineStatus,
+  enqueue,
   getDb,
   insertLead,
   listCallList,
@@ -32,6 +35,7 @@ import {
   countSentToday,
   upsertMailbox,
   logEvent,
+  taskQueueSummary,
   updateLead,
   type LeadStatus,
 } from "./db.ts"
@@ -54,7 +58,18 @@ beforeEach(() => {
   for (const t of ["messages", "events", "tasks", "leads"]) {
     db.exec(`DELETE FROM ${t}`)
   }
+  db.exec("DELETE FROM singleton_lock")
 })
+
+function setHeartbeat(at: number): void {
+  getDb()
+    .prepare(
+      `INSERT INTO singleton_lock (id, owner_pid, heartbeat_at)
+       VALUES (1, 4242, ?)
+       ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at`
+    )
+    .run(at)
+}
 
 function seedLead(
   overrides: { status?: LeadStatus; phone?: string | null; name?: string } = {}
@@ -353,4 +368,101 @@ test("countSentToday ignores rehearsals so they cannot eat the real daily cap", 
     1,
     "a real send still counts"
   )
+})
+
+// ---------------------------------------------------------------------------
+// engineStatus — the "is anything actually running?" signal
+// ---------------------------------------------------------------------------
+
+test("engineStatus reports stopped when the engine has never run", () => {
+  getDb().exec("DELETE FROM singleton_lock")
+  const status = engineStatus(NOW)
+  assert.equal(status.running, false)
+  assert.equal(status.lastSeenAt, null)
+})
+
+test("engineStatus reports running off a recent heartbeat", () => {
+  setHeartbeat(NOW - 30_000)
+  assert.equal(engineStatus(NOW).running, true)
+})
+
+test("engineStatus reports stopped once the heartbeat goes stale", () => {
+  // The engine ticks every 60s and the lock is considered abandoned after
+  // about three minutes, so five minutes of silence is a dead process.
+  setHeartbeat(NOW - 5 * 60_000)
+  const status = engineStatus(NOW)
+  assert.equal(status.running, false)
+  assert.equal(status.lastSeenAt, NOW - 5 * 60_000)
+})
+
+// ---------------------------------------------------------------------------
+// dailyActivity — the dashboard chart
+// ---------------------------------------------------------------------------
+
+test("dailyActivity returns one point per day, oldest first, zero-filled", () => {
+  const points = dailyActivity(14, NOW)
+  assert.equal(points.length, 14)
+  assert.deepEqual(
+    points.map((p) => p.sent),
+    new Array(14).fill(0)
+  )
+  assert.ok(points[0].date < points[13].date, "oldest day comes first")
+})
+
+test("dailyActivity counts real sends and replies on the right day", () => {
+  const leadId = seedLead()
+  insertMessage(leadId, { direction: "out", sentAt: NOW })
+  insertMessage(leadId, { direction: "out", sentAt: NOW })
+  insertMessage(leadId, { direction: "in", sentAt: NOW })
+
+  const today = dailyActivity(14, NOW).at(-1)
+  assert.equal(today?.sent, 2)
+  assert.equal(today?.replies, 1)
+})
+
+test("dailyActivity leaves rehearsals out of the chart", () => {
+  // The chart answers "is real email going out?", so a dry run must not draw
+  // a bar that makes it look like it is.
+  const leadId = seedLead()
+  insertMessage(leadId, { direction: "out", sentAt: NOW, dryRun: 1 })
+
+  assert.equal(dailyActivity(14, NOW).at(-1)?.sent, 0)
+})
+
+test("dailyActivity ignores anything older than the window", () => {
+  const leadId = seedLead()
+  insertMessage(leadId, { direction: "out", sentAt: NOW - 30 * 24 * HOUR })
+
+  const points = dailyActivity(14, NOW)
+  assert.equal(
+    points.reduce((sum, p) => sum + p.sent, 0),
+    0
+  )
+})
+
+// ---------------------------------------------------------------------------
+// taskQueueSummary — what the Settings status bar counts
+// ---------------------------------------------------------------------------
+
+test("taskQueueSummary counts each status separately", () => {
+  const leadId = seedLead()
+  const ids = [
+    enqueue("enrich", { leadId }),
+    enqueue("enrich", { leadId }),
+    enqueue("compose", { leadId }),
+    enqueue("send", { leadId }),
+  ]
+  const db = getDb()
+  db.prepare(`UPDATE tasks SET status = 'running' WHERE id = ?`).run(ids[2])
+  db.prepare(`UPDATE tasks SET status = 'failed' WHERE id = ?`).run(ids[3])
+  db.prepare(`UPDATE tasks SET status = 'done' WHERE id = ?`).run(ids[1])
+
+  const summary = taskQueueSummary()
+  assert.equal(summary.pending, 1)
+  assert.equal(summary.running, 1)
+  assert.equal(summary.failed, 1)
+  assert.equal(summary.done, 1)
+  // Only work still to do is broken down by kind; finished and dead tasks
+  // would make the queue look busier than it is.
+  assert.deepEqual(summary.byKind, { enrich: 1, compose: 1 })
 })

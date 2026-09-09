@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -37,23 +38,20 @@ interface MailboxesSectionProps {
 export function MailboxesSection({ mailboxes }: MailboxesSectionProps) {
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <div>
-          <CardTitle>Mailboxes</CardTitle>
-          <CardDescription>
-            Gmail address and app password. Test the connection before your
-            first send — it checks sending and receiving separately, because an
-            account can send fine while IMAP is switched off, and then every
-            reply is silently lost.
-          </CardDescription>
-        </div>
-        <MailboxDialog triggerLabel="Add mailbox" />
+      <CardHeader>
+        <CardTitle>Your email account</CardTitle>
+        <CardDescription>
+          The Gmail address emails go out from. Press Test after adding it. An
+          account can be fine at sending and still fail at receiving, and in
+          that state every reply quietly disappears.
+        </CardDescription>
+        <CardAction>
+          <MailboxDialog triggerLabel="Add account" />
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         {mailboxes.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No mailboxes configured yet.
-          </p>
+          <p className="text-sm text-muted-foreground">No account added yet.</p>
         )}
         {mailboxes.map((m) => (
           <MailboxRow key={m.id} mailbox={m} />
@@ -71,9 +69,11 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
   function handleDelete() {
     startTransition(() => {
       deleteMailboxAction(mailbox.id)
-        .then(() => toast.success(`Deleted "${mailbox.email}".`))
+        .then(() => toast.success(`Removed "${mailbox.email}".`))
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to delete.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not remove it."
+          )
         )
     })
   }
@@ -83,23 +83,22 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
     testMailboxConnectionAction(mailbox.id)
       .then((result) => {
         if (result.ok) {
-          toast.success(
-            `${mailbox.email} is ready — sending and receiving both work.`
-          )
+          toast.success(`${mailbox.email} works. It can send and receive.`)
           return
         }
-        // Report each leg separately. "It failed" is useless when SMTP is fine
-        // and IMAP is switched off in the Gmail account, which is a common and
-        // very confusing state: mail goes out, replies never come back.
+        // Report each half separately. "It failed" is useless when sending is
+        // fine and receiving is switched off in the Gmail account, which is a
+        // common and very confusing state: mail goes out, replies never come
+        // back.
         const failures = [
-          result.smtp.ok ? null : `Sending (SMTP): ${result.smtp.error}`,
-          result.imap.ok ? null : `Receiving (IMAP): ${result.imap.error}`,
+          result.smtp.ok ? null : `Sending failed: ${result.smtp.error}`,
+          result.imap.ok ? null : `Receiving failed: ${result.imap.error}`,
         ].filter((line): line is string => line !== null)
         toast.error(failures.join("\n\n"), { duration: 15_000 })
       })
       .catch((err: unknown) =>
         toast.error(
-          err instanceof Error ? err.message : "Connection test failed."
+          err instanceof Error ? err.message : "The test did not run."
         )
       )
       .finally(() => setTesting(false))
@@ -114,7 +113,7 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{mailbox.email}</div>
           <div className="truncate text-xs text-muted-foreground">
-            {mailbox.appPasswordMasked} · {mailbox.dailyCap}/day
+            {mailbox.appPasswordMasked} · up to {mailbox.dailyCap} a day
           </div>
         </div>
       </div>
@@ -125,7 +124,7 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
           onClick={handleTestConnection}
           disabled={testing}
         >
-          {testing ? "Testing…" : "Test connection"}
+          {testing ? "Testing…" : "Test"}
         </Button>
         <MailboxDialog
           mailbox={mailbox}
@@ -152,7 +151,7 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
           </>
         ) : (
           <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>
-            Delete
+            Remove
           </Button>
         )}
       </div>
@@ -186,12 +185,12 @@ function MailboxDialog({
         dailyCap: Number(dailyCap),
       })
         .then(() => {
-          toast.success(isEdit ? "Mailbox updated." : "Mailbox added.")
+          toast.success(isEdit ? "Saved." : "Account added.")
           setOpen(false)
           setAppPassword("")
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to save.")
+          toast.error(err instanceof Error ? err.message : "Could not save it.")
         )
     })
   }
@@ -204,17 +203,19 @@ function MailboxDialog({
       <DialogContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>{isEdit ? "Edit mailbox" : "Add mailbox"}</DialogTitle>
+            <DialogTitle>{isEdit ? "Edit account" : "Add account"}</DialogTitle>
             <DialogDescription>
-              Use a Gmail{" "}
+              You need a Gmail{" "}
               <a
                 href="https://myaccount.google.com/apppasswords"
                 target="_blank"
                 rel="noreferrer"
+                className="underline underline-offset-2"
               >
                 app password
               </a>
-              , not the account password.
+              , a 16-character code Google makes just for this. It is not your
+              normal password.
             </DialogDescription>
           </DialogHeader>
 
@@ -239,7 +240,7 @@ function MailboxDialog({
               onChange={(e) => setAppPassword(e.target.value)}
               placeholder={
                 isEdit
-                  ? "Leave blank to keep unchanged"
+                  ? "Leave blank to keep the current one"
                   : "16-character app password"
               }
               autoComplete="off"
@@ -247,7 +248,7 @@ function MailboxDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="mailbox-daily-cap">Daily cap</Label>
+            <Label htmlFor="mailbox-daily-cap">Most emails a day</Label>
             <Input
               id="mailbox-daily-cap"
               type="number"

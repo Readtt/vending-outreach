@@ -6,7 +6,7 @@
  */
 
 import { countLeads, listLeads } from "@/lib/db"
-import { TARGET_TYPES, TYPE_LABELS } from "@/lib/osm"
+import { TARGET_TYPES, TYPE_LABELS, type LeadType } from "@/lib/osm"
 import type { BusinessTypeOption, LeadListItem } from "./types"
 
 /** Brief-sanctioned alternative to real pagination: cap the table at a
@@ -30,7 +30,7 @@ export function getLeadListData(): LeadListData {
     items: rows.map((r) => ({
       id: r.id,
       name: r.name,
-      type: r.type,
+      type: typeLabel(r.type),
       status: r.status,
       score: r.score,
       email: r.email,
@@ -38,6 +38,13 @@ export function getLeadListData(): LeadListData {
       fact: r.personalization_fact,
     })),
   }
+}
+
+/** The stored `type` is an internal id like `car_dealer`. Nobody outside this
+ * codebase should have to read one, so it becomes a real name here. */
+function typeLabel(type: string | null): string | null {
+  if (!type) return null
+  return TYPE_LABELS[type as LeadType] ?? type.replace(/_/g, " ")
 }
 
 export function getBusinessTypeOptions(): BusinessTypeOption[] {

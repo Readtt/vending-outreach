@@ -13,11 +13,20 @@
  * component can receive as props.
  */
 
-import { getSetting, listMailboxes, listProviders, setSetting } from "@/lib/db"
+import {
+  engineStatus,
+  getSetting,
+  listMailboxes,
+  listProviders,
+  setSetting,
+  taskQueueSummary,
+} from "@/lib/db"
+import { AI_ROLES, getRoleModel } from "@/lib/ai"
 import {
   defaultLabelForKind,
   type MailboxPublic,
   type ProviderPublic,
+  type SettingsStatus,
 } from "./types"
 
 export { defaultLabelForKind, type MailboxPublic, type ProviderPublic }
@@ -186,4 +195,45 @@ export function getAboutSettings(): AboutSettings {
 
 export function saveAboutSettings(settings: AboutSettings): void {
   setSetting(ABOUT_SETTINGS_KEY, settings)
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/**
+ * The "is this thing actually working?" readout at the top of Settings.
+ *
+ * Settings is where someone goes right after nothing happened, and until now
+ * the page could not tell them whether the engine was even running or whether
+ * they had finished setting up. Both answers already existed in the database;
+ * they were just never shown.
+ */
+export function getSettingsStatus(): SettingsStatus {
+  const providers = listProviders()
+  const mailboxes = listMailboxes()
+  const about = getAboutSettings()
+
+  const missing: string[] = []
+  if (providers.length === 0) {
+    missing.push("an AI provider")
+  } else if (AI_ROLES.some((role) => !getRoleModel(role))) {
+    // A provider with no model chosen for a job looks finished but fails at
+    // the moment that job runs, which is hours later and far from this page.
+    missing.push("a model for each job")
+  }
+  if (mailboxes.length === 0) missing.push("a mailbox")
+  if (!about.address.trim()) missing.push("your business address")
+
+  const jobs = taskQueueSummary()
+  return {
+    engine: engineStatus(),
+    missing,
+    jobs: {
+      waiting: jobs.pending,
+      working: jobs.running,
+      failed: jobs.failed,
+      done: jobs.done,
+    },
+  }
 }

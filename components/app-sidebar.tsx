@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
@@ -23,7 +24,9 @@ function AppSidebar() {
       <nav className="flex flex-col gap-0.5 px-2">
         {NAV_LINKS.map((link) => {
           const isActive =
-            link.href === "/" ? pathname === "/" : pathname.startsWith(link.href)
+            link.href === "/"
+              ? pathname === "/"
+              : pathname.startsWith(link.href)
           return (
             <Link
               key={link.href}
@@ -40,6 +43,9 @@ function AppSidebar() {
           )
         })}
       </nav>
+      <div className="mt-auto flex flex-col items-start p-2">
+        <ThemeToggle />
+      </div>
     </aside>
   )
 }

@@ -1,3 +1,5 @@
+import { AutoRefresh } from "@/components/auto-refresh"
+import { EmptyState, Page, PageHeader } from "@/components/page"
 import { countLeads } from "@/lib/db"
 import { ApprovalBanner } from "./approval-banner"
 import { FindLocationsDialog } from "./find-locations-dialog"
@@ -13,31 +15,24 @@ export default function LeadsPage() {
   const heldCount = countLeads({ status: ["held"] })
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-lg font-medium">Leads</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Every business this app knows about, and where each one stands.
-          </p>
-        </div>
-        <FindLocationsDialog typeOptions={typeOptions} />
-      </div>
+    <Page width="wide">
+      <AutoRefresh />
+      <PageHeader
+        title="Leads"
+        description="Every business found so far, and what has happened with each one."
+        action={<FindLocationsDialog typeOptions={typeOptions} />}
+      />
 
-      <div className="mt-6">
-        <ApprovalBanner heldCount={heldCount} />
-        {items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border px-6 py-12 text-center">
-            <p className="text-sm font-medium">No leads yet.</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Use &quot;Find locations&quot; to search a city or ZIP for nearby
-              businesses.
-            </p>
-          </div>
-        ) : (
-          <LeadTable items={items} total={total} cap={cap} />
-        )}
-      </div>
-    </div>
+      <ApprovalBanner heldCount={heldCount} />
+
+      {items.length === 0 ? (
+        <EmptyState title="No businesses yet.">
+          Use <strong>Find businesses</strong> to search a town or ZIP code for
+          places nearby.
+        </EmptyState>
+      ) : (
+        <LeadTable items={items} total={total} cap={cap} />
+      )}
+    </Page>
   )
 }

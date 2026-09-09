@@ -20,10 +20,23 @@ import {
 } from "@/components/ui/table"
 import { LeadDetailDialog } from "./lead-detail-dialog"
 import {
+  leadFit,
+  LEAD_FIT_EXPLANATION,
   LEAD_STATUS_BADGE_VARIANT,
   LEAD_STATUS_LABELS,
   type LeadListItem,
 } from "./types"
+
+// Base UI's Select renders the raw value in its closed state unless it is
+// given a label for each option, which is how this filter used to sit there
+// reading "all".
+const STATUS_FILTER_ITEMS = [
+  { value: "all", label: "All stages" },
+  ...Object.entries(LEAD_STATUS_LABELS).map(([value, label]) => ({
+    value,
+    label,
+  })),
+]
 
 interface LeadTableProps {
   items: LeadListItem[]
@@ -55,42 +68,40 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
           className="max-w-56"
         />
         <Select
+          items={STATUS_FILTER_ITEMS}
           value={status}
           onValueChange={(v) => {
             if (v) setStatus(v)
           }}
         >
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {Object.entries(LEAD_STATUS_LABELS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
+            {STATUS_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground">
-          {filtered.length} of {items.length} shown
-          {total > cap
-            ? ` · ${total} leads total, showing the ${cap} most recent`
-            : ""}
+          Showing {filtered.length} of {items.length}
+          {total > cap ? ` · ${total} in total, newest ${cap} shown` : ""}
         </span>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border">
+      <div className="overflow-x-auto rounded-xl border border-border">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Score</TableHead>
+              <TableHead>Kind</TableHead>
+              <TableHead>Stage</TableHead>
+              <TableHead title={LEAD_FIT_EXPLANATION}>Fit</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Phone</TableHead>
-              <TableHead>Personalization fact</TableHead>
+              <TableHead>Detail we&apos;ll mention</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -100,7 +111,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                   colSpan={7}
                   className="text-center text-muted-foreground"
                 >
-                  No leads match.
+                  Nothing matches.
                 </TableCell>
               </TableRow>
             )}
@@ -114,7 +125,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                   className="max-w-48 truncate font-medium"
                   title={item.name ?? undefined}
                 >
-                  {item.name ?? "Unnamed"}
+                  {item.name ?? "No name"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.type ?? "—"}
@@ -124,8 +135,11 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                     {LEAD_STATUS_LABELS[item.status]}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {item.score}
+                <TableCell
+                  className="text-muted-foreground"
+                  title={LEAD_FIT_EXPLANATION}
+                >
+                  {leadFit(item.score)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.email ?? "—"}

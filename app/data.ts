@@ -7,11 +7,15 @@
 
 import {
   countLeads,
+  dailyActivity,
   dashboardStats,
+  engineStatus,
   getLeadById,
   listMailboxes,
   listRecentEvents,
   taskQueueSummary,
+  type DailyActivityPoint,
+  type EngineStatus,
   type EventRow,
 } from "@/lib/db"
 import {
@@ -30,9 +34,10 @@ import type {
   BreakerInfo,
   DashboardTiles,
   MailboxHealthItem,
-  QueueSummary,
   RecentFailure,
 } from "./types"
+
+export type { DailyActivityPoint, EngineStatus }
 
 /** Operator-local midnight for `now`. Node's `Date` already uses this machine's
  * own timezone, which is the right "operator" clock for a local-first app. */
@@ -49,6 +54,7 @@ export function hasAnyLeads(): boolean {
 export function getDashboardTiles(now: number = Date.now()): DashboardTiles {
   const stats = dashboardStats(operatorLocalMidnight(now), now)
   const sending = getSendingSettings()
+  const queue = taskQueueSummary()
 
   // The cap that actually stops sending is the warm-up ramp, not the number in
   // Settings. On day one that is 5, climbing ~20% per day with real sending
@@ -79,11 +85,20 @@ export function getDashboardTiles(now: number = Date.now()): DashboardTiles {
     warmingUp: mailboxes.length > 0 && effectiveCap < sending.emailsPerDay,
     dryRunToday: stats.dryRunToday,
     repliesLast7d: stats.repliesLast7d,
-    hotLeads: stats.hotLeads,
+    waitingForYou: stats.hotLeads,
     readyToSend: stats.readyToSend,
-    hardBounceRateLast50: stats.hardBounceRateLast50,
-    totalLeads: stats.totalLeads,
+    preparing: queue.pending + queue.running,
+    bounceRateLast50: stats.hardBounceRateLast50,
   }
+}
+
+export function getEngineStatus(): EngineStatus {
+  return engineStatus()
+}
+
+/** Two weeks of sends and replies for the dashboard chart. */
+export function getActivityChart(): DailyActivityPoint[] {
+  return dailyActivity(14)
 }
 
 export function getSendControlState(): {
@@ -107,12 +122,13 @@ export function getBreakerInfo(): BreakerInfo | null {
   }
 }
 
-export function getQueueSummary(): QueueSummary {
-  return taskQueueSummary()
+/** How many jobs gave up for good. Zero is the normal case. */
+export function getFailedJobCount(): number {
+  return taskQueueSummary().failed
 }
 
-/** The reasons behind the most recent dead-lettered tasks, for the "N tasks
- * gave up" line — otherwise a failed task is completely invisible. */
+/** The reasons behind the most recent dead-lettered tasks, for the "N jobs
+ * gave up" banner — otherwise a failed job is completely invisible. */
 export function getRecentFailures(limit = 5): RecentFailure[] {
   const rows = listRecentEvents(limit, { types: ["task_dead_letter"] })
   return rows.map((row) => {
@@ -122,22 +138,17 @@ export function getRecentFailures(limit = 5): RecentFailure[] {
 }
 
 export function getMailboxHealth(): MailboxHealthItem[] {
-  return listMailboxes().map((m) => {
-    const pause = getMailboxPause(m.id)
-    return {
-      id: m.id,
-      email: m.email,
-      dailyCap: m.daily_cap,
-      status: m.status,
-      pausedReason: pause?.reason ?? null,
-      pausedUntil: pause?.until ?? null,
-    }
-  })
+  return listMailboxes().map((m) => ({
+    id: m.id,
+    email: m.email,
+    status: m.status,
+    pausedReason: getMailboxPause(m.id)?.reason ?? null,
+  }))
 }
 
 /** Resolves lead names for a batch of events in one pass — cheap locally
- * (SQLite, indexed PK lookups), and the only way the feed can say "Drafted
- * an email — Joe's Gym" instead of an anonymous line. */
+ * (SQLite, indexed PK lookups), and the only way the feed can say "Wrote an
+ * email — Joe's Gym" instead of an anonymous line. */
 function resolveLeadNames(events: readonly EventRow[]): Map<string, string> {
   const ids = new Set<string>()
   for (const e of events) {

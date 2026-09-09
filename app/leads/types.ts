@@ -87,18 +87,19 @@ export function formatDateTime(epochMs: number | null): string {
   })
 }
 
+/** Plain-language names for each stage a lead can be at. */
 export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   new: "New",
-  enriching: "Enriching",
-  ready: "Ready",
-  held: "Held",
-  contacted: "Contacted",
+  enriching: "Researching",
+  ready: "Ready to send",
+  held: "Needs your OK",
+  contacted: "Emailed",
   replied: "Replied",
-  hot: "Hot",
+  hot: "Needs you",
   won: "Won",
-  dead: "Dead",
-  unqualified: "Unqualified",
-  suppressed: "Suppressed",
+  dead: "Not interested",
+  unqualified: "Not a fit",
+  suppressed: "Asked us to stop",
 }
 
 type BadgeVariant = "default" | "secondary" | "outline" | "destructive"
@@ -119,3 +120,24 @@ export const LEAD_STATUS_BADGE_VARIANT: Record<LeadStatus, BadgeVariant> = {
   unqualified: "destructive",
   suppressed: "destructive",
 }
+
+/**
+ * The lead score, said in words.
+ *
+ * The raw number is a 6-12 band nobody outside this codebase can interpret,
+ * and a bare "9" in a table column is exactly the kind of number that means
+ * nothing to the person reading it. The bands below come from
+ * `SCORING` in `lib/leads.ts`: a lead only reaches scoring at all once it has
+ * an email, a website and a checked fact, and anything under 7 is dropped
+ * before it gets here.
+ */
+export type LeadFit = "Great" | "Good" | "OK"
+
+export function leadFit(score: number): LeadFit {
+  if (score >= 10) return "Great"
+  if (score >= 8) return "Good"
+  return "OK"
+}
+
+export const LEAD_FIT_EXPLANATION =
+  "Based on the kind of business, its opening hours, and how much we could find out about it."

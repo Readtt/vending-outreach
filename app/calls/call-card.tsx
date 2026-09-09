@@ -32,7 +32,7 @@ export function CallCard({ item }: { item: CallListItem }) {
       .then((text) => setScript(text))
       .catch((err: unknown) =>
         toast.error(
-          err instanceof Error ? err.message : "Failed to generate a script."
+          err instanceof Error ? err.message : "Could not write a script."
         )
       )
       .finally(() => setGenerating(false))
@@ -43,11 +43,13 @@ export function CallCard({ item }: { item: CallListItem }) {
       setCallOutcomeAction(item.id, next)
         .then(() => {
           setOutcome(next)
-          toast.success(`Marked ${CALL_OUTCOME_LABELS[next].toLowerCase()}.`)
+          toast.success(`Saved: ${CALL_OUTCOME_LABELS[next].toLowerCase()}.`)
           router.refresh()
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to update.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not save that."
+          )
         )
     })
   }
@@ -61,7 +63,7 @@ export function CallCard({ item }: { item: CallListItem }) {
           </h2>
           <p className="text-xs text-muted-foreground">
             {item.type ? `${item.type} · ` : ""}
-            {item.hoursSinceContact}h since first contact
+            emailed {item.hoursSinceContact} hours ago
           </p>
         </div>
         <a
@@ -81,7 +83,7 @@ export function CallCard({ item }: { item: CallListItem }) {
       {item.lastEmailBody && (
         <details className="text-sm">
           <summary className="cursor-pointer text-xs text-muted-foreground">
-            Email sent — {item.lastEmailSubject ?? "no subject"}
+            Read the email we sent: {item.lastEmailSubject ?? "no subject"}
           </summary>
           <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
             {item.lastEmailBody}
@@ -101,14 +103,14 @@ export function CallCard({ item }: { item: CallListItem }) {
           disabled={generating}
           className="self-start"
         >
-          {generating ? "Writing…" : "Generate call script"}
+          {generating ? "Writing…" : "Write me a script"}
         </Button>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
         {outcome ? (
           <span className="text-xs text-muted-foreground">
-            Marked: {CALL_OUTCOME_LABELS[outcome]}
+            Saved: {CALL_OUTCOME_LABELS[outcome]}
           </span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
@@ -131,7 +133,7 @@ export function CallCard({ item }: { item: CallListItem }) {
           size="xs"
           variant="ghost"
         >
-          Printable packet
+          Print a one-pager
         </Button>
       </div>
     </div>

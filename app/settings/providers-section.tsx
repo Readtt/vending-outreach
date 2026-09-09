@@ -10,6 +10,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -47,6 +48,13 @@ const PROVIDER_KINDS: ProviderKind[] = [
   "openai_compatible",
 ]
 
+// Base UI's Select shows the raw value when closed unless it is handed a
+// label for each option.
+const PROVIDER_KIND_ITEMS = PROVIDER_KINDS.map((kind) => ({
+  value: kind,
+  label: defaultLabelForKind(kind),
+}))
+
 interface ProvidersSectionProps {
   providers: ProviderPublic[]
   roleModels: Record<AiRole, RoleModelSetting | null>
@@ -59,21 +67,20 @@ export function ProvidersSection({
   return (
     <div className="flex flex-col gap-6">
       <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <div>
-            <CardTitle>Providers</CardTitle>
-            <CardDescription>
-              Anthropic, Google, or anything OpenAI-compatible — OpenRouter,
-              Groq, DeepSeek, xAI, Together, Fireworks, Ollama, LM Studio.
-            </CardDescription>
-          </div>
-          <ProviderDialog triggerLabel="Add provider" />
+        <CardHeader>
+          <CardTitle>Where your AI comes from</CardTitle>
+          <CardDescription>
+            Add a key from Anthropic, Google, or any OpenAI-compatible service:
+            OpenRouter, Groq, DeepSeek, xAI, Together, Fireworks, or Ollama and
+            LM Studio running on this computer.
+          </CardDescription>
+          <CardAction>
+            <ProviderDialog triggerLabel="Add provider" />
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {providers.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No providers configured yet.
-            </p>
+            <p className="text-sm text-muted-foreground">Nothing added yet.</p>
           )}
           {providers.map((p) => (
             <ProviderRow key={p.id} provider={p} />
@@ -83,10 +90,10 @@ export function ProvidersSection({
 
       <Card>
         <CardHeader>
-          <CardTitle>Model assignment</CardTitle>
+          <CardTitle>Which model does which job</CardTitle>
           <CardDescription>
-            Pick the provider and model for each job. The model list is fetched
-            live from that provider&apos;s own catalogue.
+            The list comes straight from your provider. A sensible model is
+            picked for you the first time. Change it whenever you like.
           </CardDescription>
         </CardHeader>
         <CardContent className="divide-y divide-border">
@@ -111,9 +118,11 @@ function ProviderRow({ provider }: { provider: ProviderPublic }) {
   function handleDelete() {
     startTransition(() => {
       deleteProviderAction(provider.id)
-        .then(() => toast.success(`Deleted "${provider.label}".`))
+        .then(() => toast.success(`Removed "${provider.label}".`))
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to delete.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not remove it."
+          )
         )
     })
   }
@@ -125,7 +134,7 @@ function ProviderRow({ provider }: { provider: ProviderPublic }) {
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{provider.label}</div>
           <div className="truncate text-xs text-muted-foreground">
-            {provider.hasApiKey ? provider.apiKeyMasked : "No API key"}
+            {provider.hasApiKey ? provider.apiKeyMasked : "No key yet"}
             {provider.baseUrl ? ` · ${provider.baseUrl}` : ""}
           </div>
         </div>
@@ -156,7 +165,7 @@ function ProviderRow({ provider }: { provider: ProviderPublic }) {
           </>
         ) : (
           <Button variant="ghost" size="sm" onClick={() => setConfirming(true)}>
-            Delete
+            Remove
           </Button>
         )}
       </div>
@@ -186,12 +195,12 @@ function ProviderDialog({
     startTransition(() => {
       saveProviderAction({ id: provider?.id, kind, label, apiKey, baseUrl })
         .then(() => {
-          toast.success(isEdit ? "Provider updated." : "Provider added.")
+          toast.success(isEdit ? "Saved." : "Provider added.")
           setOpen(false)
           setApiKey("")
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to save.")
+          toast.error(err instanceof Error ? err.message : "Could not save it.")
         )
     })
   }
@@ -208,13 +217,15 @@ function ProviderDialog({
               {isEdit ? "Edit provider" : "Add provider"}
             </DialogTitle>
             <DialogDescription>
-              Keys are stored locally and never sent to the browser once saved.
+              Your key stays on this computer and is never shown in full again
+              once saved.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="provider-kind">Kind</Label>
+            <Label htmlFor="provider-kind">Provider</Label>
             <Select
+              items={PROVIDER_KIND_ITEMS}
               value={kind}
               onValueChange={(v) => {
                 if (v) setKind(v as ProviderKind)
@@ -224,9 +235,9 @@ function ProviderDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PROVIDER_KINDS.map((k) => (
-                  <SelectItem key={k} value={k}>
-                    {defaultLabelForKind(k)}
+                {PROVIDER_KIND_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -234,7 +245,7 @@ function ProviderDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="provider-label">Label</Label>
+            <Label htmlFor="provider-label">Name it</Label>
             <Input
               id="provider-label"
               value={label}
@@ -252,14 +263,15 @@ function ProviderDialog({
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={
                 isEdit
-                  ? (provider?.apiKeyMasked ?? "Leave blank to keep unchanged")
+                  ? (provider?.apiKeyMasked ??
+                    "Leave blank to keep the current key")
                   : "sk-..."
               }
               autoComplete="off"
             />
             {isEdit && (
               <p className="text-xs text-muted-foreground">
-                Leave blank to keep the saved key.
+                Leave blank to keep the key you already saved.
               </p>
             )}
           </div>

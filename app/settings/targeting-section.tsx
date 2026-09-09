@@ -20,11 +20,11 @@ export function TargetingSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Targeting</CardTitle>
+        <CardTitle>Who to find</CardTitle>
         <CardDescription>
-          Where to look, and what kind of business counts as a lead. Bounding
-          boxes are clamped to the US elsewhere in the app — CASL and GDPR
-          don&apos;t apply here by design.
+          Where to look and what kinds of business to look for. These are the
+          starting values on the Leads page, where you can change them for any
+          one search. Searches only cover the US.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -33,7 +33,7 @@ export function TargetingSection({
           className="flex flex-col gap-6"
         >
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="location">City or ZIP</Label>
+            <Label htmlFor="location">Town or ZIP code</Label>
             <Input
               id="location"
               name="location"
@@ -44,7 +44,7 @@ export function TargetingSection({
 
           <LabeledRangeSlider
             name="radiusMiles"
-            label="Radius"
+            label="How far to look"
             defaultValue={[settings.radiusMiles]}
             min={1}
             max={60}
@@ -52,7 +52,7 @@ export function TargetingSection({
           />
 
           <div className="flex flex-col gap-2">
-            <Label>Business types</Label>
+            <Label>Kinds of business</Label>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
               {BUSINESS_TYPES.map((type) => (
                 <label

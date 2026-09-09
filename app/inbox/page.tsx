@@ -1,3 +1,5 @@
+import { AutoRefresh } from "@/components/auto-refresh"
+import { Page, PageHeader } from "@/components/page"
 import { getInboxThreads } from "./data"
 import { InboxView } from "./inbox-view"
 
@@ -8,15 +10,13 @@ export default function InboxPage() {
   const threads = getInboxThreads()
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <h1 className="text-lg font-medium">Inbox</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Only people who need a human. Everything the bot could dispose of on its
-        own never shows up here.
-      </p>
-      <div className="mt-6">
-        <InboxView threads={threads} />
-      </div>
-    </div>
+    <Page width="wide">
+      <AutoRefresh seconds={30} />
+      <PageHeader
+        title="Inbox"
+        description="Replies that need a person. Anything the app could deal with by itself never reaches here."
+      />
+      <InboxView threads={threads} />
+    </Page>
   )
 }

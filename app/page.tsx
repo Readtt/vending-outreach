@@ -1,17 +1,24 @@
 import Link from "next/link"
+import { ActivityChart } from "@/components/activity-chart"
+import { AutoRefresh } from "@/components/auto-refresh"
+import { Page, PageHeader } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
 import {
+  getActivityChart,
   getActivityFeed,
   getBreakerInfo,
   getDashboardTiles,
+  getEngineStatus,
+  getFailedJobCount,
   getMailboxHealth,
-  getQueueSummary,
   getRecentFailures,
   getSendControlState,
   getStopFilePresent,
   hasAnyLeads,
+  type DailyActivityPoint,
 } from "./data"
 import { RearmBreakerButton } from "./rearm-breaker-button"
 import { SendToggle } from "./send-toggle"
@@ -23,7 +30,6 @@ import {
   type BreakerInfo,
   type DashboardTiles,
   type MailboxHealthItem,
-  type QueueSummary,
   type RecentFailure,
 } from "./types"
 
@@ -32,8 +38,6 @@ import {
 // app/settings/page.tsx for the identical reasoning.
 export const dynamic = "force-dynamic"
 
-const TASK_KIND_ORDER = ["enrich", "compose", "send", "classify"]
-
 export default function DashboardPage() {
   if (!hasAnyLeads()) {
     return <GetStarted />
@@ -41,21 +45,31 @@ export default function DashboardPage() {
 
   const tiles = getDashboardTiles()
   const send = getSendControlState()
+  const engine = getEngineStatus()
   const stopPresent = getStopFilePresent()
   const breaker = getBreakerInfo()
-  const queue = getQueueSummary()
+  const failedJobs = getFailedJobCount()
   const failures = getRecentFailures()
   const mailboxes = getMailboxHealth()
+  const chart = getActivityChart()
   const activity = getActivityFeed(30)
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
-      <h1 className="text-lg font-medium">Dashboard</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        What happened, what needs you, and what is about to happen.
-      </p>
+    <Page>
+      <AutoRefresh />
+      <PageHeader
+        title="Dashboard"
+        description="What happened today, and anything that needs you."
+        action={<EnginePill running={engine.running} />}
+      />
 
       <Tiles tiles={tiles} />
+
+      {stopPresent && <StopBanner />}
+      {breaker && <BreakerBanner breaker={breaker} />}
+      {failedJobs > 0 && (
+        <FailedBanner count={failedJobs} failures={failures} />
+      )}
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Card>
@@ -71,35 +85,30 @@ export default function DashboardPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Pipeline</CardTitle>
+            <CardTitle>The last two weeks</CardTitle>
           </CardHeader>
           <CardContent>
-            <QueueStatus queue={queue} failures={failures} />
+            <Chart points={chart} />
           </CardContent>
         </Card>
       </div>
 
-      {stopPresent && <StopBanner />}
-      {breaker && <BreakerBanner breaker={breaker} />}
-
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Mailboxes</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          {mailboxes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No mailboxes configured yet.
-            </p>
-          ) : (
-            mailboxes.map((m) => <MailboxRow key={m.id} mailbox={m} />)
-          )}
-        </CardContent>
-      </Card>
+      {mailboxes.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Your email accounts</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {mailboxes.map((m) => (
+              <MailboxRow key={m.id} mailbox={m} />
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="mt-4" id="activity-feed">
         <CardHeader>
-          <CardTitle>Activity</CardTitle>
+          <CardTitle>Recent activity</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col divide-y divide-border">
           {activity.length === 0 ? (
@@ -111,7 +120,40 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </Page>
+  )
+}
+
+/**
+ * Whether the engine process is alive, next to the page title.
+ *
+ * A stopped engine is the single most common reason nothing happens, and it
+ * used to be invisible: the UI ran perfectly well on its own while no work
+ * was being done.
+ */
+function EnginePill({ running }: { running: boolean }) {
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs",
+        running
+          ? "border-border text-muted-foreground"
+          : "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-500"
+      )}
+      title={
+        running
+          ? "The engine checked in within the last few minutes."
+          : "Run `pnpm dev` to start the engine. The website works without it, but no work gets done."
+      }
+    >
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          running ? "bg-primary" : "bg-amber-500"
+        )}
+      />
+      {running ? "Engine running" : "Engine stopped"}
+    </span>
   )
 }
 
@@ -139,7 +181,7 @@ function Tile({
 
 function Tiles({ tiles }: { tiles: DashboardTiles }) {
   return (
-    <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       <Tile
         label="Sent today"
         value={`${tiles.sentToday} / ${tiles.dailyCap}`}
@@ -148,115 +190,134 @@ function Tiles({ tiles }: { tiles: DashboardTiles }) {
         // stall at 5 with the tile reading "/ 25" and nothing explaining it.
         sub={
           tiles.warmingUp
-            ? `warming up toward ${tiles.configuredCap}`
+            ? `working up to ${tiles.configuredCap} a day`
             : tiles.dryRunToday > 0
-              ? `+${tiles.dryRunToday} rehearsal`
+              ? `plus ${tiles.dryRunToday} practice`
               : undefined
         }
       />
-      <Tile label="Replies (7d)" value={String(tiles.repliesLast7d)} />
+      <Tile label="Replies this week" value={String(tiles.repliesLast7d)} />
       <Tile
-        label="Hot leads"
-        value={String(tiles.hotLeads)}
-        sub={tiles.hotLeads > 0 ? "awaiting you" : undefined}
+        label="Waiting for you"
+        value={String(tiles.waitingForYou)}
+        sub={tiles.waitingForYou > 0 ? "in your Inbox" : undefined}
       />
-      <Tile label="Ready to send" value={String(tiles.readyToSend)} />
       <Tile
-        label="Hard bounce rate"
+        label="Ready to send"
+        value={String(tiles.readyToSend)}
+        sub={
+          tiles.preparing > 0
+            ? `${tiles.preparing} more being written`
+            : undefined
+        }
+      />
+      <Tile
+        label="Bounced"
         value={
-          tiles.hardBounceRateLast50 === null
+          tiles.bounceRateLast50 === null
             ? "—"
-            : formatPercent(tiles.hardBounceRateLast50)
+            : formatPercent(tiles.bounceRateLast50)
         }
         sub={
-          tiles.hardBounceRateLast50 === null
-            ? "not enough data"
-            : "last 50 sends"
+          tiles.bounceRateLast50 === null
+            ? "too early to tell"
+            : "of the last 50 sent"
         }
       />
+    </div>
+  )
+}
+
+function Chart({ points }: { points: DailyActivityPoint[] }) {
+  const total = points.reduce((sum, p) => sum + p.sent, 0)
+  if (total === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Nothing sent yet. Once emails start going out, this fills in.
+      </p>
+    )
+  }
+  return <ActivityChart points={points} />
+}
+
+function Banner({
+  tone,
+  children,
+}: {
+  tone: "warning" | "danger"
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        "mt-4 rounded-xl border px-4 py-3 text-sm",
+        tone === "danger"
+          ? "border-destructive/30 bg-destructive/5"
+          : "border-amber-500/40 bg-amber-500/5"
+      )}
+    >
+      {children}
     </div>
   )
 }
 
 function StopBanner() {
   return (
-    <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+    <Banner tone="danger">
       <p className="font-medium text-destructive">
-        Sending is halted — a STOP file is present.
+        Everything is halted. There is a STOP file.
       </p>
       <p className="mt-1 text-muted-foreground">
-        Delete the <code className="text-xs">STOP</code> file in the project
-        root (or the path named by{" "}
-        <code className="text-xs">VENDING_STOP_FILE</code>, if set) to let the
-        engine resume. Nothing else on this page can do that for you — it is a
-        filesystem kill switch by design.
+        Delete the file named <code className="text-xs">STOP</code> in the
+        project folder to let the engine start again. Nothing on this page can
+        do that for you; that is the point of it.
       </p>
-    </div>
+    </Banner>
   )
 }
 
 function BreakerBanner({ breaker }: { breaker: BreakerInfo }) {
   return (
-    <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <Banner tone="warning">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
           <p className="font-medium">
-            Circuit breaker tripped: {humanizeBreakerName(breaker.breaker)}
+            Sending stopped itself: {humanizeBreakerName(breaker.breaker)}
           </p>
           <p className="mt-1 text-muted-foreground">{breaker.reason}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Tripped {formatDateTime(breaker.trippedAt)}. This is a deliberate
-            safety gate, not an error to dismiss — re-arming is a decision only
-            you make.
+            Stopped {formatDateTime(breaker.trippedAt)}. This is a safety limit
+            doing its job, not a glitch. Read it before you switch sending back
+            on.
           </p>
         </div>
         <RearmBreakerButton />
       </div>
-    </div>
+    </Banner>
   )
 }
 
-function QueueStatus({
-  queue,
+function FailedBanner({
+  count,
   failures,
 }: {
-  queue: QueueSummary
+  count: number
   failures: RecentFailure[]
 }) {
-  const kinds = [
-    ...TASK_KIND_ORDER.filter((k) => queue.byKind[k]),
-    ...Object.keys(queue.byKind).filter((k) => !TASK_KIND_ORDER.includes(k)),
-  ]
   const latestReason = failures.find((f) => f.reason)?.reason
-
   return (
-    <div className="flex flex-col gap-2 text-sm">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span>
-          <strong className="tabular-nums">{queue.pending}</strong>{" "}
-          <span className="text-muted-foreground">pending</span>
-        </span>
-        <span>
-          <strong className="tabular-nums">{queue.running}</strong>{" "}
-          <span className="text-muted-foreground">running</span>
-        </span>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {kinds.length > 0
-          ? kinds.map((k) => `${queue.byKind[k]} ${k}`).join(" · ")
-          : "Nothing queued right now."}
+    <Banner tone="warning">
+      <p className="font-medium">
+        {count} job{count === 1 ? "" : "s"} gave up after repeated tries
       </p>
-      {queue.failed > 0 && (
-        <a
-          href="#activity-feed"
-          className="text-xs text-destructive underline-offset-2 hover:underline"
-        >
-          {queue.failed} task{queue.failed === 1 ? "" : "s"} gave up after
-          repeated failures
-          {latestReason ? ` — "${latestReason}"` : ""}
-        </a>
-      )}
-    </div>
+      <p className="mt-1 text-muted-foreground">
+        {latestReason ? `Most recent reason: ${latestReason}. ` : ""}
+        <a href="#activity-feed" className="underline underline-offset-2">
+          See recent activity
+        </a>{" "}
+        for the rest.
+      </p>
+    </Banner>
   )
 }
 
@@ -264,16 +325,9 @@ function MailboxRow({ mailbox }: { mailbox: MailboxHealthItem }) {
   const paused = mailbox.pausedReason !== null
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
-      <div className="min-w-0">
-        <div className="truncate font-medium">{mailbox.email}</div>
-        <div className="text-xs text-muted-foreground">
-          {mailbox.dailyCap}/day
-        </div>
-      </div>
+      <span className="truncate font-medium">{mailbox.email}</span>
       <Badge variant={paused ? "destructive" : "outline"}>
-        {paused
-          ? `Paused${mailbox.pausedReason ? `: ${mailbox.pausedReason}` : ""}`
-          : mailbox.status}
+        {paused ? `Paused: ${mailbox.pausedReason}` : mailbox.status}
       </Badge>
     </div>
   )
@@ -285,7 +339,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       <div className="min-w-0">
         <span>{item.text}</span>
         {item.leadName && (
-          <span className="text-muted-foreground"> — {item.leadName}</span>
+          <span className="text-muted-foreground"> · {item.leadName}</span>
         )}
         {item.extra && (
           <div className="text-xs text-muted-foreground">{item.extra}</div>
@@ -300,20 +354,18 @@ function ActivityRow({ item }: { item: ActivityItem }) {
 
 function GetStarted() {
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
-      <h1 className="text-lg font-medium">Welcome</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        No leads yet. Two steps to get moving:
-      </p>
-      <ol className="mt-4 flex flex-col gap-3 text-sm">
-        <li className="rounded-lg border border-border px-3 py-2.5">
-          <span className="font-medium">
-            1. Add an AI provider and a mailbox.
-          </span>
+    <Page>
+      <PageHeader
+        title="Welcome"
+        description="Two things to do before this can start working."
+      />
+      <ol className="flex flex-col gap-3 text-sm">
+        <li className="rounded-xl border border-border px-4 py-3">
+          <span className="font-medium">1. Fill in Settings.</span>
           <p className="mt-1 text-muted-foreground">
-            Settings needs at least one AI provider (for writing emails), one
-            Gmail mailbox (for sending them), and your physical address under
-            &quot;About you&quot; for CAN-SPAM.
+            You need an AI provider to write the emails, a Gmail account to send
+            them from, and your business address. US law requires that address
+            on every sales email.
           </p>
           <Button
             render={<Link href="/settings" />}
@@ -321,14 +373,14 @@ function GetStarted() {
             size="sm"
             className="mt-2"
           >
-            Go to Settings
+            Open Settings
           </Button>
         </li>
-        <li className="rounded-lg border border-border px-3 py-2.5">
-          <span className="font-medium">2. Find locations.</span>
+        <li className="rounded-xl border border-border px-4 py-3">
+          <span className="font-medium">2. Find some businesses.</span>
           <p className="mt-1 text-muted-foreground">
-            Search a city or ZIP in Leads, pick the business types you want, and
-            import what looks good.
+            Search a town or ZIP code, pick the kinds of business you want, and
+            add the ones that look good.
           </p>
           <Button
             render={<Link href="/leads" />}
@@ -337,10 +389,10 @@ function GetStarted() {
             variant="outline"
             className="mt-2"
           >
-            Go to Leads
+            Open Leads
           </Button>
         </li>
       </ol>
-    </div>
+    </Page>
   )
 }

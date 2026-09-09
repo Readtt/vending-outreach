@@ -1,3 +1,4 @@
+import { Page, PageHeader } from "@/components/page"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   AI_ROLES,
@@ -11,11 +12,13 @@ import {
   getMailboxesForClient,
   getProvidersForClient,
   getSendingSettings,
+  getSettingsStatus,
   getTargetingSettings,
 } from "./data"
 import { MailboxesSection } from "./mailboxes-section"
 import { ProvidersSection } from "./providers-section"
 import { SendingSection } from "./sending-section"
+import { StatusBar } from "./status-bar"
 import { TargetingSection } from "./targeting-section"
 
 // This page reads the local SQLite DB directly (not through `fetch`), so
@@ -30,6 +33,7 @@ export default function SettingsPage() {
   const sending = getSendingSettings()
   const targeting = getTargetingSettings()
   const about = getAboutSettings()
+  const status = getSettingsStatus()
 
   const roleModels = AI_ROLES.reduce(
     (acc, role) => {
@@ -40,19 +44,20 @@ export default function SettingsPage() {
   )
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <h1 className="text-lg font-medium">Settings</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Everything here is local — nothing is sent anywhere until you turn
-        sending on.
-      </p>
+    <Page>
+      <PageHeader
+        title="Settings"
+        description="All of this stays on your computer. Nothing is sent until you switch sending on."
+      />
+
+      <StatusBar initial={status} />
 
       <Tabs defaultValue="providers" className="mt-6">
         <TabsList>
-          <TabsTrigger value="providers">AI Providers</TabsTrigger>
-          <TabsTrigger value="mailboxes">Mailboxes</TabsTrigger>
+          <TabsTrigger value="providers">AI models</TabsTrigger>
+          <TabsTrigger value="mailboxes">Email</TabsTrigger>
           <TabsTrigger value="sending">Sending</TabsTrigger>
-          <TabsTrigger value="targeting">Targeting</TabsTrigger>
+          <TabsTrigger value="targeting">Who to find</TabsTrigger>
           <TabsTrigger value="about">About you</TabsTrigger>
         </TabsList>
 
@@ -72,6 +77,6 @@ export default function SettingsPage() {
           <AboutSection settings={about} />
         </TabsContent>
       </Tabs>
-    </div>
+    </Page>
   )
 }

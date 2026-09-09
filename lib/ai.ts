@@ -145,8 +145,8 @@ function resolveRoleModel(role: AiRole): RoleModelSetting & {
   const setting = getRoleModel(role)
   if (!setting) {
     throw new Error(
-      `No model is configured for the "${ROLE_LABELS[role]}" role yet. ` +
-        "Set one in Settings → AI Providers."
+      `No model is picked for "${ROLE_LABELS[role]}" yet. ` +
+        "Choose one in Settings → AI models."
     )
   }
   return { ...setting, model: getModel(setting.providerId, setting.modelId) }

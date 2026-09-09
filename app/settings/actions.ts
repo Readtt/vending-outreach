@@ -34,6 +34,7 @@ import {
   DEFAULT_SENDING_SETTINGS,
   DEFAULT_TARGETING_SETTINGS,
   defaultLabelForKind,
+  getSettingsStatus,
   saveAboutSettings,
   saveSendingSettings,
   saveTargetingSettings,
@@ -42,6 +43,7 @@ import {
   type SendingSettings,
   type TargetingSettings,
 } from "./data"
+import type { SettingsStatus } from "./types"
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -309,4 +311,13 @@ export async function testMailboxConnectionAction(
     return { smtp: { ok: false, error }, imap: { ok: false, error }, ok: false }
   }
   return verifyMailboxCredentials(mailbox.email, mailbox.app_password)
+}
+
+/**
+ * Reads the status bar's numbers. Polled by `status-bar.tsx` on a timer so
+ * only that strip updates — refreshing the whole page here would fight with
+ * anyone half-way through filling in a form.
+ */
+export async function getSettingsStatusAction(): Promise<SettingsStatus> {
+  return getSettingsStatus()
 }

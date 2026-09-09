@@ -1498,6 +1498,8 @@ export interface TaskQueueSummary {
   pending: number
   running: number
   failed: number
+  /** Finished successfully, all-time. Rows are never pruned, so this only grows. */
+  done: number
   /** Pending + running, per kind. */
   byKind: Record<string, number>
 }
@@ -1523,6 +1525,7 @@ export function taskQueueSummary(): TaskQueueSummary {
     pending: 0,
     running: 0,
     failed: 0,
+    done: 0,
     byKind: {},
   }
   for (const row of rows) {
@@ -1530,9 +1533,121 @@ export function taskQueueSummary(): TaskQueueSummary {
     if (row.status === "pending") summary.pending += n
     else if (row.status === "running") summary.running += n
     else if (row.status === "failed") summary.failed += n
+    else if (row.status === "done") summary.done += n
     if (row.status === "pending" || row.status === "running") {
       summary.byKind[row.kind] = (summary.byKind[row.kind] ?? 0) + n
     }
   }
   return summary
+}
+
+// ---------------------------------------------------------------------------
+// Engine liveness
+// ---------------------------------------------------------------------------
+
+export interface EngineStatus {
+  /** True while the engine process has checked in recently. */
+  running: boolean
+  /** When it last checked in, or null if it has never run on this machine. */
+  lastSeenAt: number | null
+}
+
+/**
+ * Whether the engine process is alive, read off the heartbeat it already
+ * writes to `singleton_lock` on every tick.
+ *
+ * This exists because the single most common "nothing is happening" report is
+ * a UI running without its engine — `pnpm dev:web` instead of `pnpm dev`, or a
+ * worker that died in a terminal the user has since closed. The web app cannot
+ * see other processes, but it can see whether one has touched this row lately.
+ *
+ * `STALE_LOCK_MS` is deliberately the same threshold the lock itself uses to
+ * decide a holder has crashed, so "the UI says stopped" and "another worker
+ * may take over" can never disagree.
+ */
+export function engineStatus(now: number = Date.now()): EngineStatus {
+  const row = getDb()
+    .prepare(`SELECT heartbeat_at FROM singleton_lock WHERE id = 1`)
+    .get() as { heartbeat_at: number | null } | undefined
+  const lastSeenAt = row?.heartbeat_at ?? null
+  return {
+    lastSeenAt,
+    running: lastSeenAt !== null && now - lastSeenAt <= STALE_LOCK_MS,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Daily activity — the dashboard's chart
+// ---------------------------------------------------------------------------
+
+export interface DailyActivityPoint {
+  /** Local calendar day, `YYYY-MM-DD`. */
+  date: string
+  /** Real emails sent that day. Rehearsals are excluded on purpose. */
+  sent: number
+  /** Replies that arrived that day. */
+  replies: number
+}
+
+function localDayKey(epochMs: number): string {
+  const d = new Date(epochMs)
+  const month = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${d.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * Emails sent and replies received per day over the last `days` days, oldest
+ * first, with quiet days present as zeroes rather than missing.
+ *
+ * The day buckets are built here in JS and matched against SQLite's
+ * `localtime`; both read the same OS timezone, which is the right clock for
+ * an app that only ever runs on the operator's own machine.
+ */
+export function dailyActivity(
+  days = 14,
+  now: number = Date.now()
+): DailyActivityPoint[] {
+  const db = getDb()
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - (days - 1))
+  const windowStart = start.getTime()
+
+  const countByDay = (sql: string): Map<string, number> => {
+    const rows = db.prepare(sql).all(windowStart) as unknown as {
+      day: string
+      n: number
+    }[]
+    return new Map(rows.map((r) => [r.day, Number(r.n)]))
+  }
+
+  const sent = countByDay(
+    `SELECT strftime('%Y-%m-%d', sent_at / 1000, 'unixepoch', 'localtime') AS day,
+            count(*) AS n
+       FROM messages
+      WHERE direction = 'out' AND status = 'sent' AND dry_run = 0
+        AND sent_at >= ?
+      GROUP BY day`
+  )
+  const replies = countByDay(
+    `SELECT strftime('%Y-%m-%d', COALESCE(sent_at, created_at) / 1000, 'unixepoch', 'localtime') AS day,
+            count(*) AS n
+       FROM messages
+      WHERE direction = 'in' AND COALESCE(sent_at, created_at) >= ?
+      GROUP BY day`
+  )
+
+  const points: DailyActivityPoint[] = []
+  for (let i = 0; i < days; i++) {
+    const at = new Date(windowStart)
+    at.setDate(at.getDate() + i)
+    const date = localDayKey(at.getTime())
+    points.push({
+      date,
+      sent: sent.get(date) ?? 0,
+      replies: replies.get(date) ?? 0,
+    })
+  }
+  return points
 }

@@ -68,7 +68,9 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
           setState({
             status: "error",
             message:
-              err instanceof Error ? err.message : "Search failed. Try again.",
+              err instanceof Error
+                ? err.message
+                : "The search did not work. Try again.",
           })
         )
     })
@@ -80,13 +82,15 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
         .then(({ inserted, skipped }) => {
           setState({ status: "imported", inserted, skipped })
           toast.success(
-            `Imported ${inserted} lead${inserted === 1 ? "" : "s"} — enrichment queued.` +
-              (skipped > 0 ? ` ${skipped} already known, skipped.` : "")
+            `Added ${inserted} business${inserted === 1 ? "" : "es"}. Research starts now.` +
+              (skipped > 0 ? ` ${skipped} were already on the list.` : "")
           )
           router.refresh()
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Import failed.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not add them."
+          )
         )
     })
   }
@@ -102,14 +106,14 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={<Button size="sm" />}>
-        Find locations
+        Find businesses
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Find locations</DialogTitle>
+          <DialogTitle>Find businesses</DialogTitle>
           <DialogDescription>
-            Searches OpenStreetMap for nearby businesses. US only — a search
-            outside the US is refused. This can take 10–30 seconds.
+            Searches OpenStreetMap, a free public map, for businesses near a
+            place. US only. It can take 10–30 seconds.
           </DialogDescription>
         </DialogHeader>
 
@@ -143,7 +147,7 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label>Business types</Label>
+            <Label>Kinds of business</Label>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
               {typeOptions.map((type) => (
                 <label
@@ -175,22 +179,22 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
                 </strong>
                 {state.result.resolvedPlace
                   ? ` near ${state.result.resolvedPlace}`
-                  : ""}{" "}
-                —{" "}
+                  : ""}
+                . Of those,{" "}
                 <strong className="tabular-nums">
                   {state.result.newCount}
                 </strong>{" "}
-                new.
+                are new to you.
               </p>
               {state.result.clamped && (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                  The search area was pulled back to US bounds — searches
-                  outside the US are refused by design (CASL/GDPR).
+                  The search area was trimmed to inside the US. This app only
+                  emails US businesses on purpose.
                 </p>
               )}
               {state.result.newCount === 0 && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Nothing new — every match is already a lead.
+                  Nothing new. You already have all of these.
                 </p>
               )}
             </div>
@@ -198,10 +202,10 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
 
           {state.status === "imported" && (
             <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm">
-              Imported {state.inserted} lead{state.inserted === 1 ? "" : "s"} —
-              enrichment queued.
+              Added {state.inserted} business
+              {state.inserted === 1 ? "" : "es"}. Research starts now.
               {state.skipped > 0
-                ? ` ${state.skipped} already known, skipped.`
+                ? ` ${state.skipped} were already on the list.`
                 : ""}
             </div>
           )}
@@ -230,8 +234,8 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
               disabled={isPending}
             >
               {isPending
-                ? "Importing…"
-                : `Import ${state.result.newCount} lead${state.result.newCount === 1 ? "" : "s"}`}
+                ? "Adding…"
+                : `Add ${state.result.newCount} business${state.result.newCount === 1 ? "" : "es"}`}
             </Button>
           )}
         </DialogFooter>

@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { toast } from "sonner"
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
 import {
   Select,
   SelectContent,
@@ -9,12 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  ModelSelectorContent,
-  ModelSelectorRoot,
-  ModelSelectorTrigger,
-  type ModelOption,
-} from "@/components/assistant-ui/elements/model-selector"
 import {
   ROLE_DESCRIPTIONS,
   ROLE_LABELS,
@@ -70,6 +65,24 @@ export function RoleModelPicker({
   const models = current?.status === "ok" ? current.models : EMPTY_MODELS
   const error = current?.status === "error" ? current.message : null
 
+  // Read inside the fetch callback below to decide whether a default is still
+  // wanted by the time the catalogue arrives.
+  const modelIdRef = useRef(modelId)
+  useEffect(() => {
+    modelIdRef.current = modelId
+  })
+
+  function save(nextModelId: string, forProviderId: string) {
+    setModelId(nextModelId)
+    startTransition(() => {
+      saveRoleModelAction(role, forProviderId, nextModelId).catch(
+        (err: unknown) => {
+          toast.error(err instanceof Error ? err.message : "Could not save.")
+        }
+      )
+    })
+  }
+
   useEffect(() => {
     if (!providerId) return
     let cancelled = false
@@ -84,11 +97,23 @@ export function RoleModelPicker({
           setFetched({
             providerId,
             status: "error",
-            message: body.error ?? "Failed to load models.",
+            message: body.error ?? "Could not load the model list.",
           })
           return
         }
         setFetched({ providerId, status: "ok", models: body.models })
+
+        // Finish the setup rather than leaving three empty dropdowns behind.
+        // Someone who has just pasted an API key has no way to know which of a
+        // provider's models belongs in which job, and an unset role fails
+        // hours later, at compose time, far from this page. This only ever
+        // fills a blank; an existing choice is never overwritten.
+        if (modelIdRef.current) return
+        const pick = suggestDefaultModelId(
+          role,
+          body.models.map((m) => m.id)
+        )
+        if (pick) save(pick, providerId)
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -96,7 +121,9 @@ export function RoleModelPicker({
           providerId,
           status: "error",
           message:
-            err instanceof Error ? err.message : "Failed to load models.",
+            err instanceof Error
+              ? err.message
+              : "Could not load the model list.",
         })
       })
     return () => {
@@ -108,37 +135,24 @@ export function RoleModelPicker({
     // does, so they double as a cheap, safe re-fetch trigger — this is what
     // makes the dropdown repopulate after adding a key with no manual
     // refresh.
-  }, [providerId, selectedProvider?.apiKeyMasked, selectedProvider?.baseUrl])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    providerId,
+    role,
+    selectedProvider?.apiKeyMasked,
+    selectedProvider?.baseUrl,
+  ])
 
-  const modelOptions: ModelOption[] = useMemo(
-    () => models.map((m) => ({ id: m.id, name: m.name?.trim() || m.id })),
-    [models]
+  // Without this the closed dropdown shows the provider's internal id.
+  const providerItems = useMemo(
+    () => providers.map((p) => ({ value: p.id, label: p.label })),
+    [providers]
   )
 
-  const suggestion =
-    !modelId && selectedProvider && models.length > 0
-      ? suggestDefaultModelId(
-          selectedProvider.kind,
-          role,
-          models.map((m) => m.id)
-        )
-      : undefined
-
-  function handleProviderChange(next: string | null) {
-    if (!next) return
-    setProviderId(next)
-    setModelId(undefined)
-  }
-
-  function handleModelChange(next: string) {
-    setModelId(next)
-    if (!providerId) return
-    startTransition(() => {
-      saveRoleModelAction(role, providerId, next).catch((err: unknown) => {
-        toast.error(err instanceof Error ? err.message : "Failed to save.")
-      })
-    })
-  }
+  const modelOptions: ComboboxOption[] = useMemo(
+    () => models.map((m) => ({ value: m.id, label: m.name?.trim() || m.id })),
+    [models]
+  )
 
   return (
     <div className="flex flex-col gap-1.5 py-3">
@@ -151,46 +165,39 @@ export function RoleModelPicker({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Select
+            items={providerItems}
             value={providerId}
-            onValueChange={handleProviderChange}
+            onValueChange={(next) => {
+              if (!next) return
+              setProviderId(next)
+              setModelId(undefined)
+            }}
             disabled={providers.length === 0}
           >
             <SelectTrigger className="w-36">
               <SelectValue placeholder="Provider" />
             </SelectTrigger>
             <SelectContent>
-              {providers.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.label}
+              {providerItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <ModelSelectorRoot
-            models={modelOptions}
+          <Combobox
+            className="w-48"
+            options={modelOptions}
             value={modelId}
-            onValueChange={handleModelChange}
-          >
-            <ModelSelectorTrigger
-              className="w-48"
-              disabled={!providerId || loading}
-            >
-              {loading ? "Loading…" : undefined}
-            </ModelSelectorTrigger>
-            <ModelSelectorContent searchable />
-          </ModelSelectorRoot>
+            onValueChange={(next) => providerId && save(next, providerId)}
+            disabled={!providerId || loading}
+            placeholder={loading ? "Loading…" : "Pick a model"}
+            searchPlaceholder="Search models…"
+            emptyText="No model matches."
+          />
         </div>
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
-      {suggestion && (
-        <button
-          type="button"
-          onClick={() => handleModelChange(suggestion)}
-          className="self-end text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-        >
-          Use suggested default: {suggestion}
-        </button>
-      )}
     </div>
   )
 }

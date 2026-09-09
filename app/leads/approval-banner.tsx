@@ -10,15 +10,15 @@ interface ApprovalBannerProps {
 }
 
 /**
- * The review gate for the first batch of drafts.
+ * The review gate for the first batch of emails.
  *
- * The first twenty enriched leads are composed but parked at `held` (spec
- * 9.2), and the send handler waits on them indefinitely. Nothing in the app
- * released them until this existed, so those leads sat forever with no
+ * The first twenty researched leads get an email written but parked at `held`
+ * (spec 9.2), and the send handler waits on them indefinitely. Nothing in the
+ * app released them until this existed, so those leads sat forever with no
  * explanation — the queue looked busy and no email ever went out.
  *
  * It is worth reading them rather than clicking straight through: this batch
- * is the only cheap chance to notice the template is wrong, before hundreds of
+ * is the only cheap chance to notice the writing is wrong, before hundreds of
  * businesses see the same mistake.
  */
 export function ApprovalBanner({ heldCount }: ApprovalBannerProps) {
@@ -33,11 +33,13 @@ export function ApprovalBanner({ heldCount }: ApprovalBannerProps) {
         .then(({ approved }) => {
           setConfirming(false)
           toast.success(
-            `Approved ${approved} draft${approved === 1 ? "" : "s"}. They'll go out on the normal schedule.`
+            `Approved ${approved} email${approved === 1 ? "" : "s"}. They will go out at the usual pace.`
           )
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Could not approve.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not approve them."
+          )
         )
     })
   }
@@ -47,12 +49,12 @@ export function ApprovalBanner({ heldCount }: ApprovalBannerProps) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium">
-            {heldCount} draft{heldCount === 1 ? "" : "s"} waiting for you
+            {heldCount} email{heldCount === 1 ? "" : "s"} waiting for your OK
           </p>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Nothing sends until you approve these. Open a few and read them —
-            this is the cheapest moment to catch a bad template, before the rest
-            of your list gets the same email.
+            Nothing goes out until you approve these. Open a few and read them
+            first. This is the cheapest moment to catch bad writing, before the
+            rest of your list gets the same email.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

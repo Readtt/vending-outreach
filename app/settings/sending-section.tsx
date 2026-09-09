@@ -18,9 +18,9 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
       <CardHeader>
         <CardTitle>Sending</CardTitle>
         <CardDescription>
-          How fast, how often, and when this app is allowed to send. The
-          scheduler still enforces pacing at send time — this just sets the
-          targets.
+          How many emails a day, how far apart, and at what times. New accounts
+          start at 5 a day and work up to your number over a couple of weeks.
+          That slow start is what keeps Gmail from shutting you down.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -30,16 +30,16 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
         >
           <LabeledRangeSlider
             name="emailsPerDay"
-            label="Emails per day"
+            label="Emails a day"
             defaultValue={[settings.emailsPerDay]}
             min={1}
             max={100}
             warnAbove={EMAILS_PER_DAY_WARN_ABOVE}
-            warnText={`Above ${EMAILS_PER_DAY_WARN_ABOVE}/day starts to look automated to spam filters.`}
+            warnText={`More than ${EMAILS_PER_DAY_WARN_ABOVE} a day starts to look like a robot to spam filters.`}
           />
           <LabeledRangeSlider
             name="sendGapMinutes"
-            label="Gap between sends"
+            label="Gap between emails"
             defaultValue={[
               settings.sendGapMinMinutes,
               settings.sendGapMaxMinutes,
@@ -50,7 +50,7 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
           />
           <LabeledRangeSlider
             name="sendWindowHours"
-            label="Sending window"
+            label="Only send between"
             defaultValue={[settings.windowStartHour, settings.windowEndHour]}
             min={0}
             max={24}
@@ -60,7 +60,8 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
             <div>
               <Label htmlFor="weekdaysOnly">Weekdays only</Label>
               <p className="text-xs text-muted-foreground">
-                Never send Saturday or Sunday, recipient-local time.
+                Never send on a Saturday or Sunday, going by the time where they
+                are.
               </p>
             </div>
             <Switch

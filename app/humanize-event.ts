@@ -16,74 +16,74 @@ export interface HumanizedEvent {
 }
 
 const EVENT_LABELS: Record<string, string> = {
-  // --- lead sourcing ---------------------------------------------------
-  "leads.found": "Searched for leads",
-  "leads.imported": "Imported leads",
-  "lead.enriched": "Lead enriched",
-  "lead.unqualified": "Lead disqualified",
-  "osm.search": "Searched OpenStreetMap",
+  // --- finding businesses -------------------------------------------------
+  "leads.found": "Searched for businesses",
+  "leads.imported": "Added businesses to the list",
+  "lead.enriched": "Researched a business",
+  "lead.unqualified": "Skipped a business",
+  "osm.search": "Searched the map",
 
-  // --- composing ---------------------------------------------------------
-  "compose.drafted": "Drafted an email",
-  "compose.validation_failed": "Draft failed validation, retrying",
-  "compose.escalated": "Draft needs you",
+  // --- writing --------------------------------------------------------------
+  "compose.drafted": "Wrote an email",
+  "compose.validation_failed": "Rewriting an email",
+  "compose.escalated": "An email needs you",
 
   // --- sending -------------------------------------------------------------
   "send.step_sent": "Sent an email",
-  "send.enabled_changed": "Sending setting changed",
-  "send.blocked": "Send blocked",
-  "send.suppressed_at_send": "Send blocked — address suppressed",
-  "send.duplicate": "Duplicate send skipped",
+  "send.enabled_changed": "Changed the sending setting",
+  "send.blocked": "Held an email back",
+  "send.suppressed_at_send": "Did not send, because they asked us to stop",
+  "send.duplicate": "Skipped a repeat email",
   "send.auto_reply": "Sent an automatic reply",
-  "send.failed": "Send failed",
-  "send.dryrun_cleared": "Cleared rehearsal drafts",
-  "send.breaker_tripped_after_send": "Circuit breaker tripped after sending",
-  "send.reconcile_unavailable": "Could not verify a send",
-  "send.reconcile_failed": "Failed to verify a send",
-  "send.reconciled_found": "Verified a send in Sent Mail",
-  "send.reconciled_absent": "A send could not be confirmed as sent",
+  "send.failed": "An email would not send",
+  "send.dryrun_cleared": "Deleted the practice emails",
+  "send.breaker_tripped_after_send": "Sending stopped itself after a send",
+  "send.reconcile_unavailable": "Could not check your Sent folder",
+  "send.reconcile_failed": "Failed to check your Sent folder",
+  "send.reconciled_found": "Found the email in your Sent folder",
+  "send.reconciled_absent": "An email is missing from your Sent folder",
 
-  // --- inbound / classification ------------------------------------------
-  "inbound.bounce": "Email bounced",
-  "inbound.suppressed": "Reply ignored — sender is suppressed",
-  "inbound.escalate": "Reply needs you",
-  "inbound.classify_enqueued": "Reply queued for triage",
-  "inbound.ignored": "Reply ignored",
-  "inbound.unmatched": "Received an email that didn't match a lead",
-  "inbound.loop_alarm": "Loop alarm — possible auto-reply loop",
-  "inbound.handler_error": "Error handling a reply",
-  "classify.escalated": "Reply needs you",
-  "classify.classified": "Classified a reply",
-  "classify.silenced": "Reply handled, lead closed",
-  "classify.out_of_office": "Out-of-office reply — follow-up rescheduled",
+  // --- replies --------------------------------------------------------------
+  "inbound.bounce": "An email came back undelivered",
+  "inbound.suppressed": "Ignored a reply, because they asked us to stop",
+  "inbound.escalate": "A reply needs you",
+  "inbound.classify_enqueued": "Reading a reply",
+  "inbound.ignored": "Ignored a reply",
+  "inbound.unmatched": "Got an email we could not match to anyone",
+  "inbound.loop_alarm": "Stopped a possible reply loop",
+  "inbound.handler_error": "Something went wrong reading a reply",
+  "classify.escalated": "A reply needs you",
+  "classify.classified": "Sorted a reply",
+  "classify.silenced": "Reply handled, this one is closed",
+  "classify.out_of_office": "They are away, so the follow-up moved later",
   "classify.fixed_reply_sent": "Sent an automatic reply",
 
-  // --- mailboxes / circuit breakers --------------------------------------
-  "mailbox.paused": "Mailbox paused",
-  "mailbox.hard_stop": "All mailboxes stopped",
-  suppressed: "Address suppressed",
-  "circuit_breaker.tripped": "Circuit breaker tripped",
-  "circuit_breaker.rearmed": "Circuit breaker re-armed",
-  "imap.uidvalidity_changed": "Mailbox re-synced",
-  "imap.connection_error": "Mailbox connection error",
-  "imap.folder_opened": "Checked mailbox for replies",
-  "imap.drain_error": "Error reading mailbox",
+  // --- email account / safety limits ---------------------------------------
+  "mailbox.paused": "Paused an email account",
+  "mailbox.hard_stop": "Stopped every email account",
+  suppressed: "Added an address to the never-email list",
+  "circuit_breaker.tripped": "Sending stopped itself",
+  "circuit_breaker.rearmed": "Sending switched back on",
+  "imap.uidvalidity_changed": "Re-synced with your mailbox",
+  "imap.connection_error": "Could not reach your mailbox",
+  "imap.folder_opened": "Checked for new replies",
+  "imap.drain_error": "Something went wrong reading your mailbox",
 
-  // --- engine / task queue -------------------------------------------------
+  // --- the engine ----------------------------------------------------------
   "engine.started": "Engine started",
-  "engine.lock_lost": "Engine lost its lock",
-  "engine.loop_alarm": "Loop alarm",
+  "engine.lock_lost": "Engine stopped, because another copy took over",
+  "engine.loop_alarm": "Engine caught itself going in circles",
   "engine.unhandled_rejection": "Unexpected engine error",
-  "engine.uncaught_exception": "Unexpected engine crash",
-  "task.leases_reaped": "Recovered stuck tasks",
-  task_dead_letter: "A task gave up after repeated failures",
-  "task.catchup_suppressed": "Skipped an overdue task",
-  "task.needs_reconciliation": "A send needs manual verification",
-  "task.enriched": "Lead enriched",
-  "task.unqualified": "Lead disqualified",
+  "engine.uncaught_exception": "The engine crashed",
+  "task.leases_reaped": "Picked up jobs that got stuck",
+  task_dead_letter: "A job gave up after repeated tries",
+  "task.catchup_suppressed": "Skipped a job that was too old to run",
+  "task.needs_reconciliation": "An email needs checking by hand",
+  "task.enriched": "Researched a business",
+  "task.unqualified": "Skipped a business",
 
   // --- AI ---
-  ai_call: "AI call",
+  ai_call: "Asked the AI",
 }
 
 function titleCaseFallback(type: string): string {
@@ -129,8 +129,8 @@ export function humanizeEvent(
     return {
       text:
         detail.reason === "stop_file"
-          ? "Engine halted — STOP file present"
-          : "Engine halted — circuit breaker tripped",
+          ? "Everything halted, because there is a STOP file"
+          : "Everything halted, because a safety limit tripped",
     }
   }
   if (type === "send.enabled_changed") {

@@ -14,6 +14,8 @@ import {
 import { approveLeadAction, getLeadDetailAction } from "./actions"
 import {
   formatDateTime,
+  leadFit,
+  LEAD_FIT_EXPLANATION,
   LEAD_STATUS_BADGE_VARIANT,
   LEAD_STATUS_LABELS,
   type LeadDetail,
@@ -62,7 +64,7 @@ export function LeadDetailDialog({
             : {
                 leadId,
                 status: "error",
-                message: "This lead no longer exists.",
+                message: "This business is no longer in the list.",
               }
         )
       })
@@ -72,7 +74,7 @@ export function LeadDetailDialog({
           leadId,
           status: "error",
           message:
-            err instanceof Error ? err.message : "Failed to load this lead.",
+            err instanceof Error ? err.message : "Could not load this one.",
         })
       })
     return () => {
@@ -102,14 +104,19 @@ export function LeadDetailDialog({
               </div>
               <DialogDescription>
                 {[detail.type, detail.address].filter(Boolean).join(" · ") ||
-                  "No details on file yet."}
+                  "Nothing on file yet."}
               </DialogDescription>
             </DialogHeader>
 
             <div className="flex flex-col gap-4 text-sm">
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                <dt className="text-muted-foreground">Score</dt>
-                <dd className="tabular-nums">{detail.score}</dd>
+                <dt
+                  className="text-muted-foreground"
+                  title={LEAD_FIT_EXPLANATION}
+                >
+                  Fit
+                </dt>
+                <dd title={LEAD_FIT_EXPLANATION}>{leadFit(detail.score)}</dd>
                 <dt className="text-muted-foreground">Email</dt>
                 <dd className="truncate">{detail.email ?? "—"}</dd>
                 <dt className="text-muted-foreground">Phone</dt>
@@ -134,8 +141,7 @@ export function LeadDetailDialog({
               {detail.fact && (
                 <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
                   <div className="text-xs text-muted-foreground">
-                    Personalization fact
-                    {detail.factCategory ? ` · ${detail.factCategory}` : ""}
+                    Detail we&apos;ll mention
                   </div>
                   <p className="mt-1">{detail.fact}</p>
                 </div>
@@ -145,16 +151,14 @@ export function LeadDetailDialog({
                 <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
                   {approved === detail.id ? (
                     <p className="text-sm text-muted-foreground">
-                      Approved. It will go out on the normal schedule.
+                      Approved. It will go out at the usual pace.
                     </p>
                   ) : (
                     <>
-                      <p className="text-sm font-medium">
-                        Waiting for your approval
-                      </p>
+                      <p className="text-sm font-medium">Waiting for your OK</p>
                       <p className="mt-0.5 text-sm text-muted-foreground">
-                        The draft below is written and queued, but nothing sends
-                        until you release it.
+                        The email below is written and queued. Nothing goes out
+                        until you say so.
                       </p>
                       <Button
                         size="sm"
@@ -167,20 +171,20 @@ export function LeadDetailDialog({
                               .then(() => {
                                 setApproved(id)
                                 toast.success(
-                                  "Approved — it will send on schedule."
+                                  "Approved. It will go out at the usual pace."
                                 )
                               })
                               .catch((err: unknown) =>
                                 toast.error(
                                   err instanceof Error
                                     ? err.message
-                                    : "Could not approve."
+                                    : "Could not approve it."
                                 )
                               )
                           })
                         }}
                       >
-                        {approving ? "Approving…" : "Approve and send"}
+                        {approving ? "Approving…" : "Approve this one"}
                       </Button>
                     </>
                   )}
@@ -188,10 +192,10 @@ export function LeadDetailDialog({
               )}
 
               <div>
-                <h3 className="text-sm font-medium">Message thread</h3>
+                <h3 className="text-sm font-medium">Emails</h3>
                 {detail.messages.length === 0 ? (
                   <p className="mt-1 text-sm text-muted-foreground">
-                    No messages yet.
+                    No emails yet.
                   </p>
                 ) : (
                   <div className="mt-2 flex flex-col gap-2">
@@ -207,7 +211,7 @@ export function LeadDetailDialog({
                         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>
                             {m.direction === "in" ? "Received" : "Sent"}
-                            {m.dryRun ? " · rehearsal" : ""}
+                            {m.dryRun ? " · practice" : ""}
                           </span>
                           <span>{formatDateTime(m.sentAt ?? m.createdAt)}</span>
                         </div>
@@ -224,10 +228,10 @@ export function LeadDetailDialog({
               </div>
 
               <div>
-                <h3 className="text-sm font-medium">Activity</h3>
+                <h3 className="text-sm font-medium">What happened</h3>
                 {detail.events.length === 0 ? (
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Nothing logged yet.
+                    Nothing yet.
                   </p>
                 ) : (
                   <div className="mt-2 flex flex-col divide-y divide-border">
@@ -240,8 +244,8 @@ export function LeadDetailDialog({
                           {e.text}
                           {e.extra && (
                             <span className="text-muted-foreground">
-                              {" "}
-                              — {e.extra}
+                              {": "}
+                              {e.extra}
                             </span>
                           )}
                         </span>

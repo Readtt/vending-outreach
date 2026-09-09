@@ -11,13 +11,15 @@ export function RearmBreakerButton() {
 
   function handleRearm() {
     startTransition(() => {
-      rearmCircuitBreakerAction("Re-armed from the dashboard")
+      rearmCircuitBreakerAction("Switched back on from the dashboard")
         .then(() => {
           setConfirming(false)
-          toast.success("Circuit breaker re-armed. Sending can resume.")
+          toast.success("Safety limit cleared. Sending can start again.")
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to re-arm.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not clear it."
+          )
         )
     })
   }
@@ -31,7 +33,7 @@ export function RearmBreakerButton() {
           onClick={handleRearm}
           disabled={isPending}
         >
-          {isPending ? "Re-arming…" : "Confirm re-arm"}
+          {isPending ? "Clearing…" : "Yes, clear it"}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
           Cancel
@@ -42,7 +44,7 @@ export function RearmBreakerButton() {
 
   return (
     <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
-      Re-arm
+      Clear it
     </Button>
   )
 }

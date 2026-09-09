@@ -25,8 +25,8 @@ export type CallOutcome =
   "reached" | "left_voicemail" | "not_interested" | "interested"
 
 export const CALL_OUTCOME_LABELS: Record<CallOutcome, string> = {
-  reached: "Reached",
-  left_voicemail: "Left voicemail",
+  reached: "Spoke to them",
+  left_voicemail: "Left a voicemail",
   not_interested: "Not interested",
   interested: "Interested",
 }

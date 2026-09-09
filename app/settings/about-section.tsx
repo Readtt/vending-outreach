@@ -18,8 +18,8 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
       <CardHeader>
         <CardTitle>About you</CardTitle>
         <CardDescription>
-          Goes on every email this app sends. The physical address is required
-          by CAN-SPAM on every commercial email, not just the first.
+          This goes at the bottom of every email. Nothing gets written until the
+          address is filled in.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -35,7 +35,7 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="company">Company</Label>
+              <Label htmlFor="company">Business name</Label>
               <Input
                 id="company"
                 name="company"
@@ -57,7 +57,7 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="address">Physical address</Label>
+            <Label htmlFor="address">Postal address</Label>
             <Input
               id="address"
               name="address"
@@ -66,21 +66,23 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
               required
             />
             <p className="text-xs text-muted-foreground">
-              Required by CAN-SPAM on every commercial email.
+              US law requires a real address on every sales email. A PO box is
+              fine. This is why nothing sends until you fill it in.
             </p>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="offerTerms">Offer terms</Label>
+            <Label htmlFor="offerTerms">What you are offering</Label>
             <Textarea
               id="offerTerms"
               name="offerTerms"
               defaultValue={settings.offerTerms}
-              placeholder="e.g. a share of revenue paid back to them, no fees, no minimums"
+              placeholder="e.g. a share of what the machine sells, no fees, no minimums, we stock it and fix it"
               rows={3}
             />
             <p className="text-xs text-muted-foreground">
-              Feeds directly into the email prompts (lib/prompts.ts).
+              This is the deal every email offers. The more exact you are, the
+              better the emails read.
             </p>
           </div>
 

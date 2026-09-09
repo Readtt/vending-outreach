@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { EmptyState } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { setThreadOutcomeAction } from "./actions"
@@ -22,13 +23,10 @@ export function InboxView({ threads }: InboxViewProps) {
 
   if (threads.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-border px-6 py-16 text-center">
-        <p className="text-sm font-medium">Nothing needs you right now.</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Every reply the bot could handle on its own, it did — this list only
-          ever holds the ones it couldn&apos;t.
-        </p>
-      </div>
+      <EmptyState title="Nothing needs you right now.">
+        Every reply the app could handle on its own, it did. Only the ones it
+        cannot handle land here.
+      </EmptyState>
     )
   }
 
@@ -47,7 +45,9 @@ export function InboxView({ threads }: InboxViewProps) {
           router.refresh()
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to update.")
+          toast.error(
+            err instanceof Error ? err.message : "Could not save that."
+          )
         )
         .finally(() => setActingId(null))
     })
@@ -78,7 +78,7 @@ export function InboxView({ threads }: InboxViewProps) {
           >
             <span className="font-medium">{t.name ?? "Unnamed business"}</span>
             <span className="truncate text-xs text-muted-foreground">
-              {t.latestInboundSnippet || "No reply text on file."}
+              {t.latestInboundSnippet || "No text in the reply."}
             </span>
             <span className="text-xs text-muted-foreground">
               {t.messageCount} message{t.messageCount === 1 ? "" : "s"}
@@ -99,7 +99,7 @@ export function InboxView({ threads }: InboxViewProps) {
                 .join(" · ") || "No contact details on file."}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Escalated: {selected.escalationReason ?? "Flagged for you"}
+              Why it is here: {selected.escalationReason ?? "Flagged for you"}
             </p>
           </div>
           {mailtoHref && (
@@ -107,16 +107,14 @@ export function InboxView({ threads }: InboxViewProps) {
               href={mailtoHref}
               className="shrink-0 text-xs text-primary underline underline-offset-2"
             >
-              Reply in your mail client
+              Reply in your email app
             </a>
           )}
         </div>
 
         <div className="flex max-h-96 flex-col gap-2 overflow-y-auto">
           {selected.messages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No messages on file.
-            </p>
+            <p className="text-sm text-muted-foreground">No emails on file.</p>
           ) : (
             selected.messages.map((m) => (
               <div
@@ -149,25 +147,27 @@ export function InboxView({ threads }: InboxViewProps) {
             disabled={busy}
             onClick={() => handleOutcome(selected.leadId, "won", "won")}
           >
-            Mark won
+            Won
           </Button>
           <Button
             size="sm"
             variant="outline"
             disabled={busy}
             onClick={() =>
-              handleOutcome(selected.leadId, "nurture", "back to nurture")
+              handleOutcome(selected.leadId, "nurture", "for later")
             }
           >
-            Back to nurture
+            Try again later
           </Button>
           <Button
             size="sm"
             variant="destructive"
             disabled={busy}
-            onClick={() => handleOutcome(selected.leadId, "dead", "dead")}
+            onClick={() =>
+              handleOutcome(selected.leadId, "dead", "not interested")
+            }
           >
-            Mark dead
+            Not interested
           </Button>
         </div>
       </div>

@@ -21,20 +21,21 @@ export interface DashboardTiles {
   warmingUp: boolean
   dryRunToday: number
   repliesLast7d: number
-  hotLeads: number
+  /** Leads that replied with something a person has to answer. */
+  waitingForYou: number
+  /** Drafts written and queued, waiting their turn in the schedule. */
   readyToSend: number
-  /** Null means "not enough data yet" — never render this as 0%. */
-  hardBounceRateLast50: number | null
-  totalLeads: number
+  /** Leads still being researched or written up — the queue, in plain terms. */
+  preparing: number
+  /** Null means "not enough sent yet" — never render this as 0%. */
+  bounceRateLast50: number | null
 }
 
 export interface MailboxHealthItem {
   id: string
   email: string
-  dailyCap: number
   status: string
   pausedReason: string | null
-  pausedUntil: number | null
 }
 
 export interface ActivityItem {
@@ -44,13 +45,6 @@ export interface ActivityItem {
   leadId: string | null
   leadName: string | null
   createdAt: number | null
-}
-
-export interface QueueSummary {
-  pending: number
-  running: number
-  failed: number
-  byKind: Record<string, number>
 }
 
 export interface RecentFailure {
@@ -65,14 +59,15 @@ export interface BreakerInfo {
   trippedAt: number
 }
 
+/** Plain-language names for the safety limits that can stop sending. */
 export function humanizeBreakerName(breaker: string): string {
   const labels: Record<string, string> = {
-    auto_reply_burst: "Auto-reply burst",
-    unplanned_repeat_to_address: "Unplanned repeat send to one address",
-    domain_volume: "Domain volume limit",
-    hard_bounce_rate: "Hard bounce rate",
-    rate_limit_response: "Rate-limit response from the mail server",
-    auth_revoked: "Mailbox authentication revoked",
+    auto_reply_burst: "Too many automatic replies at once",
+    unplanned_repeat_to_address: "Nearly emailed the same address twice",
+    domain_volume: "Too many emails to one company",
+    hard_bounce_rate: "Too many emails coming back undelivered",
+    rate_limit_response: "The mail server asked us to slow down",
+    auth_revoked: "The mailbox stopped accepting the password",
   }
   return labels[breaker] ?? breaker.replace(/_/g, " ")
 }

@@ -7,12 +7,9 @@
  * keep importing from `"@/lib/ai"` as usual — this file exists purely so
  * client components (e.g. the Settings page's role/model pickers) can pull
  * in `AI_ROLES`, `ROLE_LABELS`, etc. WITHOUT transitively dragging
- * `node:sqlite` into the client bundle. Only `type`-only imports of
- * `ProviderKind` from `lib/db.ts` happen here (erased at compile time) —
- * never a value import from `./db`.
+ * `node:sqlite` into the client bundle. Nothing here imports from `./db` at
+ * all, in any form.
  */
-
-import type { ProviderKind } from "./db.ts"
 
 // ---------------------------------------------------------------------------
 // Roles
@@ -28,15 +25,16 @@ export const AI_ROLES = ["writer", "triage", "research"] as const
 export type AiRole = (typeof AI_ROLES)[number]
 
 export const ROLE_LABELS: Record<AiRole, string> = {
-  writer: "Writer",
-  triage: "Triage",
-  research: "Research",
+  writer: "Writing emails",
+  triage: "Reading replies",
+  research: "Reading websites",
 }
 
 export const ROLE_DESCRIPTIONS: Record<AiRole, string> = {
-  writer: "First emails, follow-ups, call scripts — worth spending more on.",
-  triage: "Classifies replies. Needs to be cheap and fast, not clever.",
-  research: "Distills scraped page text into facts. Cheap and fast.",
+  writer:
+    "Writes the first email, the follow-ups and your call scripts. Worth paying more for.",
+  triage: "Sorts replies into what you handle and what the app handles.",
+  research: "Finds one useful detail on a business's website.",
 }
 
 export interface RoleModelSetting {
@@ -58,49 +56,85 @@ export interface ModelSummary {
 // ---------------------------------------------------------------------------
 
 /**
- * Best-effort per-role model suggestions, keyed by provider *kind* rather
- * than a specific provider — never hardcode which provider the user must
- * use. These are only ever applied opportunistically against whatever
- * `listModels` actually returns for the provider the user configured (see
- * `suggestDefaultModelId`), so a stale or wrong guess here just means no
- * default is preselected, not a broken app.
+ * The models each job would like, best first.
+ *
+ * One list, not one per provider. The same model reaches you under different
+ * ids depending on where you get it (`claude-haiku-4-5` straight from
+ * Anthropic, `anthropic/claude-haiku-4.5` through OpenRouter), so both spellings
+ * simply sit in the list and whichever the provider actually offers wins.
+ *
+ * The rule behind the order: writing is the job worth paying for, because a
+ * stranger judges you on those emails. Reading replies and reading websites
+ * run on every message and every page, so they want the cheapest fast model
+ * available.
+ *
+ * These names go out of date, and that is fine. They are only ever matched
+ * against the catalogue the provider itself returned, so a name that no longer
+ * exists just does not match and the picker asks you to choose. It never
+ * quietly runs on something you did not pick.
  */
-const DEFAULT_MODEL_SUGGESTIONS: Record<
-  ProviderKind,
-  Partial<Record<AiRole, readonly string[]>>
-> = {
-  anthropic: {
-    writer: ["claude-sonnet-4-5", "claude-sonnet-4-5-20250929"],
-    triage: ["claude-haiku-4-5", "claude-3-5-haiku-20241022"],
-    research: ["claude-haiku-4-5", "claude-3-5-haiku-20241022"],
-  },
-  google: {
-    writer: ["gemini-2.5-pro"],
-    triage: ["gemini-2.5-flash-lite", "gemini-2.5-flash"],
-    research: ["gemini-2.5-flash-lite", "gemini-2.5-flash"],
-  },
-  openai_compatible: {
-    // Wildly provider-dependent (OpenRouter/Groq/DeepSeek/xAI/Together/
-    // Fireworks/Ollama/LM Studio all have different catalogues) — these are
-    // just plausible names to opportunistically match against whatever
-    // /models actually returns.
-    writer: ["gpt-4o", "llama-3.3-70b-versatile", "deepseek-chat"],
-    triage: ["gpt-4o-mini", "llama-3.1-8b-instant", "deepseek-chat"],
-    research: ["gpt-4o-mini", "llama-3.1-8b-instant", "deepseek-chat"],
-  },
+const ROLE_PREFERENCES: Record<AiRole, readonly string[]> = {
+  writer: [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "gemini-2.5-pro",
+    "gpt-5.5",
+    "gpt-4o",
+    "deepseek-chat",
+    "llama-3.3-70b-versatile",
+    "llama-3.3-70b-instruct",
+  ],
+  triage: [
+    "claude-haiku-4-5",
+    "claude-haiku-4.5",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gpt-5.4-mini",
+    "gpt-4o-mini",
+    "llama-3.1-8b-instant",
+    "deepseek-chat",
+  ],
+  research: [
+    "claude-haiku-4-5",
+    "claude-haiku-4.5",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gpt-5.4-mini",
+    "gpt-4o-mini",
+    "llama-3.1-8b-instant",
+    "deepseek-chat",
+  ],
 }
 
 /**
- * Picks the first suggested model id for `(providerKind, role)` that's
- * actually present in `availableModelIds`. Returns `undefined` rather than
- * guessing when nothing matches — an unselected dropdown is fine, silently
- * picking the wrong model is not.
+ * Whether `modelId` is the model `preference` names.
+ *
+ * An exact match, or the same name behind a vendor prefix. Deliberately not a
+ * substring test: that would let "gpt-4o" match "gpt-4o-mini" (a quiet
+ * downgrade for the writing job) and let "claude-opus-5" match
+ * "anthropic/claude-opus-5:batch", which answers hours later and would hang
+ * every email in the queue.
+ */
+function matchesPreference(modelId: string, preference: string): boolean {
+  return modelId === preference || modelId.endsWith(`/${preference}`)
+}
+
+/**
+ * The best model for `role` out of the ones the provider actually offers.
+ *
+ * Returns undefined when none of them match, rather than guessing. An empty
+ * dropdown the user has to fill in is a small annoyance; running every email
+ * through the wrong model is not.
  */
 export function suggestDefaultModelId(
-  providerKind: ProviderKind,
   role: AiRole,
   availableModelIds: readonly string[]
 ): string | undefined {
-  const suggestions = DEFAULT_MODEL_SUGGESTIONS[providerKind]?.[role] ?? []
-  return suggestions.find((id) => availableModelIds.includes(id))
+  for (const preference of ROLE_PREFERENCES[role]) {
+    const match = availableModelIds.find((id) =>
+      matchesPreference(id, preference)
+    )
+    if (match) return match
+  }
+  return undefined
 }

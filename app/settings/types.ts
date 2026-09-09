@@ -9,7 +9,7 @@
  * erases at compile time.
  */
 
-import type { ProviderKind } from "@/lib/db"
+import type { EngineStatus, ProviderKind } from "@/lib/db"
 
 export function defaultLabelForKind(kind: ProviderKind): string {
   if (kind === "anthropic") return "Anthropic"
@@ -32,4 +32,16 @@ export interface MailboxPublic {
   dailyCap: number
   status: string
   appPasswordMasked: string
+}
+
+export interface SettingsStatus {
+  engine: EngineStatus
+  /** Plain-language names of the things still to be filled in. Empty when done. */
+  missing: string[]
+  jobs: {
+    waiting: number
+    working: number
+    failed: number
+    done: number
+  }
 }

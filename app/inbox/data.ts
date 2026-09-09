@@ -11,26 +11,34 @@ import {
   listMessagesForLead,
   listRecentEvents,
 } from "@/lib/db"
-import { humanizeEvent } from "../humanize-event"
 import { snippet, type ThreadDetail } from "./types"
 
-// Only these types ever move a lead to `hot` (worker/handlers/classify.ts,
-// worker/handlers/compose.ts) — whichever fired most recently for a given
-// lead is "what escalated it."
-const ESCALATION_EVENT_TYPES = [
-  "classify.escalated",
-  "compose.escalated",
-  "inbound.escalate",
-]
+/**
+ * Why a lead ended up here, said in a sentence.
+ *
+ * Only these three event types ever move a lead to `hot`
+ * (worker/handlers/classify.ts, worker/handlers/compose.ts), so whichever
+ * fired most recently is the answer.
+ *
+ * The `reason` those events carry is an engineering note written for whoever
+ * is debugging the triage rules, and it shows: regex sources, RFC numbers,
+ * header names. It stays in the database and still appears in the Dashboard's
+ * activity feed, which is where the README sends you when something looks
+ * wrong. It does not belong on the screen where you decide how to answer a
+ * real person.
+ */
+const ESCALATION_REASONS: Record<string, string> = {
+  "classify.escalated": "The app was not sure what this reply meant.",
+  "compose.escalated": "The app could not write a good email for this one.",
+  "inbound.escalate": "This reply needs a person.",
+}
 
 function escalationReasonFor(leadId: string): string | null {
   const [latest] = listRecentEvents(1, {
     leadId,
-    types: ESCALATION_EVENT_TYPES,
+    types: Object.keys(ESCALATION_REASONS),
   })
-  if (!latest) return null
-  const humanized = humanizeEvent(latest.type, latest.detail_json)
-  return humanized.extra ?? humanized.text
+  return latest ? (ESCALATION_REASONS[latest.type] ?? null) : null
 }
 
 export function getInboxThreads(limit = 100): ThreadDetail[] {
