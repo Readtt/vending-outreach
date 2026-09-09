@@ -11,6 +11,7 @@ import {
   listMessagesForLead,
   listRecentEvents,
 } from "@/lib/db"
+import { TYPE_LABELS, type LeadType } from "@/lib/osm"
 import { snippet, type ThreadDetail } from "./types"
 
 /**
@@ -57,7 +58,7 @@ export function getInboxThreads(limit = 100): ThreadDetail[] {
     return {
       leadId: lead.id,
       name: lead.name,
-      type: lead.type,
+      type: typeLabel(lead.type),
       email: lead.email,
       phone: lead.phone,
       address: lead.address,
@@ -68,4 +69,10 @@ export function getInboxThreads(limit = 100): ThreadDetail[] {
       messages,
     }
   })
+}
+
+/** Same mapping the Leads table uses: `car_repair` becomes "Auto repair shop". */
+function typeLabel(type: string | null): string | null {
+  if (!type) return null
+  return TYPE_LABELS[type as LeadType] ?? type.replace(/_/g, " ")
 }

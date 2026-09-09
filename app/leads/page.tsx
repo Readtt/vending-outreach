@@ -17,7 +17,7 @@ export default function LeadsPage() {
   const { countries } = getTargetingSettings()
 
   return (
-    <Page width="wide">
+    <Page width="full">
       <AutoRefresh />
       <PageHeader
         title="Leads"

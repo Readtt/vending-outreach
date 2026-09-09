@@ -4,6 +4,7 @@
 
 import { listCallList, listMessagesForLead } from "@/lib/db"
 import { shortLocation } from "@/lib/format"
+import { TYPE_LABELS, type LeadType } from "@/lib/osm"
 import type { CallListItem } from "./types"
 
 /** `leads.research_json` holds whatever each stage has merged into it —
@@ -39,7 +40,7 @@ export function getCallListItems(now: number = Date.now()): CallListItem[] {
     return {
       id: lead.id,
       name: lead.name,
-      type: lead.type,
+      type: typeLabel(lead.type),
       // listCallList's own WHERE clause guarantees a non-empty phone.
       phone: lead.phone ?? "",
       location: shortLocation(lead.address),
@@ -51,4 +52,12 @@ export function getCallListItems(now: number = Date.now()): CallListItem[] {
         typeof research.callScript === "string" ? research.callScript : null,
     }
   })
+}
+
+/** The stored `type` is an internal id like `car_repair`. Nobody outside this
+ * codebase should have to read one, so it becomes a real name here — same
+ * mapping the Leads table uses. */
+function typeLabel(type: string | null): string | null {
+  if (!type) return null
+  return TYPE_LABELS[type as LeadType] ?? type.replace(/_/g, " ")
 }

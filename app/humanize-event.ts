@@ -117,6 +117,23 @@ const REASON_TYPES = new Set([
   "task.unqualified",
 ])
 
+/**
+ * Types the activity feed leaves out, because another event already said the
+ * same thing better.
+ *
+ * The worker records the outcome of every task it runs, and for enrichment
+ * `lib/leads.ts` has already recorded the same outcome against the lead — with
+ * the reason spelled out, where the task event carries only a code. Both were
+ * being rendered, so every business the app looked at appeared twice in the
+ * feed, the second time with less to say.
+ *
+ * They stay in the events table. This is only about what a person is shown.
+ */
+export const FEED_DUPLICATE_TYPES: readonly string[] = [
+  "task.enriched",
+  "task.unqualified",
+]
+
 /** Humanizes one event row's `type` + `detail_json` into display text. */
 export function humanizeEvent(
   type: string,

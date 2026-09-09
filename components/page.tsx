@@ -10,14 +10,22 @@ export function Page({
   width = "default",
 }: {
   children: ReactNode
-  /** `wide` is for the Leads table, which needs the extra columns. */
-  width?: "default" | "wide"
+  /**
+   * `wide` suits a page with two columns of cards. `full` is for the Leads
+   * table alone, which has eight columns and would otherwise spend its life
+   * scrolled sideways on a laptop.
+   */
+  width?: "default" | "wide" | "full"
 }) {
   return (
     <div
       className={cn(
         "mx-auto w-full px-6 py-10",
-        width === "wide" ? "max-w-6xl" : "max-w-4xl"
+        width === "full"
+          ? "max-w-[1600px]"
+          : width === "wide"
+            ? "max-w-6xl"
+            : "max-w-4xl"
       )}
     >
       {children}

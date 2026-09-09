@@ -28,7 +28,7 @@ import {
   warmupCap,
 } from "@/lib/mail-send"
 import { getSendingSettings } from "./settings/data"
-import { humanizeEvent } from "./humanize-event"
+import { FEED_DUPLICATE_TYPES, humanizeEvent } from "./humanize-event"
 import type {
   ActivityItem,
   BreakerInfo,
@@ -163,7 +163,9 @@ function resolveLeadNames(events: readonly EventRow[]): Map<string, string> {
 }
 
 export function getActivityFeed(limit = 30): ActivityItem[] {
-  const events = listRecentEvents(limit)
+  const events = listRecentEvents(limit, {
+    excludeTypes: FEED_DUPLICATE_TYPES,
+  })
   const names = resolveLeadNames(events)
   return events.map((row) => {
     const humanized = humanizeEvent(row.type, row.detail_json)

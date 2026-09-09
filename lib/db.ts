@@ -1351,10 +1351,19 @@ export function listMessagesForLead(leadId: string): MessageRow[] {
     .all(leadId) as unknown as MessageRow[]
 }
 
-/** Most recent activity first. `types` filters to a subset when given. */
+/**
+ * Most recent activity first. `types` narrows to a subset; `excludeTypes`
+ * drops one. Excluding is not the same as narrowing — the activity feed wants
+ * everything except a handful of duplicates, and listing the ~60 types it does
+ * want would go stale the first time one was added.
+ */
 export function listRecentEvents(
   limit = 50,
-  options: { leadId?: string; types?: readonly string[] } = {}
+  options: {
+    leadId?: string
+    types?: readonly string[]
+    excludeTypes?: readonly string[]
+  } = {}
 ): EventRow[] {
   const where: string[] = []
   const params: (string | number)[] = []
@@ -1365,6 +1374,12 @@ export function listRecentEvents(
   if (options.types?.length) {
     where.push(`type IN (${options.types.map(() => "?").join(", ")})`)
     params.push(...options.types)
+  }
+  if (options.excludeTypes?.length) {
+    where.push(
+      `type NOT IN (${options.excludeTypes.map(() => "?").join(", ")})`
+    )
+    params.push(...options.excludeTypes)
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : ""
   params.push(limit)

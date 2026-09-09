@@ -150,7 +150,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   <span
-                    className="block max-w-56 truncate"
+                    className="block max-w-52 truncate"
                     title={item.email ?? undefined}
                   >
                     {item.email ?? "—"}
@@ -161,7 +161,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   <span
-                    className="block max-w-64 truncate"
+                    className="block max-w-72 truncate"
                     title={item.fact ?? undefined}
                   >
                     {item.fact ?? "—"}
