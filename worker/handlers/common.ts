@@ -236,6 +236,12 @@ export const NON_ENGAGEMENT_MESSAGE_STATUSES: readonly string[] = [
   "triaged:bounce:hard",
   "triaged:bounce:soft",
   "classified:out_of_office",
+  // An out-of-office caught by triage rule 13 (subject line only, no
+  // Auto-Submitted header) escalates to a human and so never reaches a model,
+  // which means it never gets the `classified:out_of_office` stamp above. It
+  // was therefore counting as a genuine reply and permanently cancelling the
+  // sequence — a vacation responder killing the lead outright.
+  "triaged:escalate:autoresponder",
 ]
 
 /**
@@ -256,8 +262,7 @@ export function hasEverReplied(leadId: string): boolean {
        LIMIT 1`
     )
     .get(leadId, ...NON_ENGAGEMENT_MESSAGE_STATUSES) as
-    | { hit: number }
-    | undefined
+    { hit: number } | undefined
   return row !== undefined
 }
 
@@ -287,7 +292,9 @@ export interface PriorOutbound {
  * a fresh subject line — which would hide exactly the continuity bug this
  * query exists to prevent.
  */
-export function readEarliestOutbound(leadId: string): PriorOutbound | undefined {
+export function readEarliestOutbound(
+  leadId: string
+): PriorOutbound | undefined {
   return getDb()
     .prepare(
       `SELECT subject, message_id AS messageId, refs, sequence_step AS sequenceStep

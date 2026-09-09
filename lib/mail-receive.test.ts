@@ -35,6 +35,7 @@ import {
 } from "./mail-receive.ts"
 import { getCircuitBreakerState, rearmCircuitBreaker } from "./mail-send.ts"
 import { enqueue, getDb, upsertMailbox, type MailboxRow } from "./db.ts"
+import { NON_ENGAGEMENT_MESSAGE_STATUSES } from "../worker/handlers/common.ts"
 
 assert.ok(
   process.env.VENDING_DB_PATH?.includes("vending-recv-test-"),
@@ -601,4 +602,74 @@ test("a reply from a third party is escalated, never auto-handled", () => {
   const result = handleInboundMessage(record(mailbox, raw), DEPS)
   assert.equal(result.action, "escalate")
   assert.equal(result.taskId, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// Escalation lands where /inbox can actually see it (review findings 3 and 4)
+// ---------------------------------------------------------------------------
+
+test("an escalated reply moves the lead to hot, not replied", () => {
+  reset()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+  const out = seedOutbound(lead.id, mailbox.id, 0)
+
+  const raw = rawMessage(
+    {
+      From: "someone.else@bigcorp.example",
+      To: OUR_MAILBOX,
+      Subject: "Fwd: Vending machines",
+      "Message-ID": "<escalate-status-1@bigcorp.example>",
+      "In-Reply-To": out.messageId,
+      Date: "Tue, 11 Mar 2025 10:00:00 -0400",
+    },
+    "Forwarding to the person who handles this."
+  )
+
+  const result = handleInboundMessage(record(mailbox, raw), DEPS)
+  assert.equal(result.action, "escalate")
+
+  // `listInboxThreads` selects on `hot`. Writing `replied` here put the lead
+  // in a status the inbox query excludes, so escalated replies landed nowhere
+  // and the inbox reported that nothing needed attention.
+  const row = getDb()
+    .prepare(`SELECT status FROM leads WHERE id = ?`)
+    .get(lead.id) as { status: string }
+  assert.equal(row.status, "hot")
+})
+
+test("a subject-only out-of-office does not count as the lead replying", () => {
+  reset()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+  const out = seedOutbound(lead.id, mailbox.id, 0)
+
+  const raw = rawMessage(
+    {
+      From: lead.email,
+      To: OUR_MAILBOX,
+      Subject: "Automatic reply: Vending machines",
+      "Message-ID": "<ooo-subject-1@lead.example>",
+      "In-Reply-To": out.messageId,
+      Date: "Tue, 11 Mar 2025 10:00:00 -0400",
+    },
+    "I am out of the office until Monday with limited access to email."
+  )
+
+  const result = handleInboundMessage(record(mailbox, raw), DEPS)
+  assert.equal(result.action, "escalate")
+
+  // Triage rule 13 catches this by subject alone, so it never reaches a model
+  // and never gets the `classified:out_of_office` stamp. Without its own
+  // status it counted as a genuine reply and permanently cancelled the
+  // sequence — a vacation responder killing the lead outright (spec §3 says an
+  // out-of-office does not count as engagement).
+  const row = getDb()
+    .prepare(`SELECT status FROM messages WHERE id = ?`)
+    .get(result.messageRowId) as { status: string }
+  assert.equal(row.status, "triaged:escalate:autoresponder")
+  assert.ok(
+    NON_ENGAGEMENT_MESSAGE_STATUSES.includes(row.status),
+    "an autoresponder must not be treated as the lead engaging"
+  )
 })

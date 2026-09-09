@@ -849,15 +849,34 @@ export function handleInboundMessage(
   if (verdict.action === "escalate") {
     logEvent("inbound.escalate", {
       leadId: lead.id,
-      detail: { reason: verdict.reason, folder: record.folder },
+      detail: {
+        reason: verdict.reason,
+        kind: verdict.kind ?? "other",
+        folder: record.folder,
+      },
     })
+    // `hot`, not `replied`. Escalate means "a human must look at this", which
+    // is exactly what `hot` denotes and what /inbox lists. Writing `replied`
+    // here put the lead in a status the inbox query excludes, so every
+    // triage-escalated reply — including most short refusals — landed nowhere
+    // and the inbox cheerfully reported that nothing needed attention.
     getDb()
       .prepare(
-        `UPDATE leads SET status = 'replied'
-         WHERE id = ? AND status IN ('new','enriching','ready','held','contacted')`
+        `UPDATE leads SET status = 'hot'
+         WHERE id = ? AND status IN ('new','enriching','ready','held','contacted','replied')`
       )
       .run(lead.id)
-    finishRow(rowId, "triaged:escalate")
+    // An autoresponder caught only by its subject line is still worth a
+    // human's glance, but spec §3 is explicit that it does not count as the
+    // lead engaging — so it gets its own status, which
+    // NON_ENGAGEMENT_MESSAGE_STATUSES excludes. Otherwise a vacation
+    // responder silently cancels the day-4 follow-up.
+    finishRow(
+      rowId,
+      verdict.kind === "autoresponder"
+        ? "triaged:escalate:autoresponder"
+        : "triaged:escalate"
+    )
     return {
       action: "escalate",
       reason: verdict.reason,

@@ -52,6 +52,18 @@ export interface InboundMessage {
   raw?: string
 }
 
+/**
+ * Why something was escalated, in a form callers can branch on.
+ *
+ * `reason` is prose for a human; this is for code. It exists because one
+ * escalation — an autoresponder caught only by its subject line — must NOT
+ * count as the lead having engaged. Spec §3: an out-of-office does not pause
+ * the sequence. Without this discriminator the caller would have to pattern
+ * match on English, and the day-4 follow-up would be silently cancelled by a
+ * vacation responder.
+ */
+export type EscalateKind = "autoresponder" | "other"
+
 export type TriageVerdict =
   /** Never reply, never escalate, does not count as engagement. */
   | { action: "ignore"; reason: string }
@@ -59,7 +71,7 @@ export type TriageVerdict =
   /** Opt-out or hostile: stop forever. */
   | { action: "suppress"; reason: string }
   /** A human must look at this before anything else happens. */
-  | { action: "escalate"; reason: string }
+  | { action: "escalate"; reason: string; kind?: EscalateKind }
   /** The only verdict that proceeds to a model. */
   | { action: "classify"; reason: string }
 
@@ -563,6 +575,7 @@ export function triage(msg: InboundMessage): TriageVerdict {
     if (pattern.test(subject)) {
       return {
         action: "escalate",
+        kind: "autoresponder",
         reason: `subject looks like an autoresponder (${pattern.source}) but carries no Auto-Submitted header — degrading to a human, never to an auto-reply`,
       }
     }

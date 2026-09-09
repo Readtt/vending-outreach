@@ -15,7 +15,9 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-readmodel-test-"))
+const TMP_ROOT = fs.mkdtempSync(
+  path.join(os.tmpdir(), "vending-readmodel-test-")
+)
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
@@ -27,6 +29,8 @@ import {
   listInboxThreads,
   listMessagesForLead,
   listRecentEvents,
+  countSentToday,
+  upsertMailbox,
   logEvent,
   updateLead,
   type LeadStatus,
@@ -81,19 +85,21 @@ function insertMessage(
     dryRun?: number
     error?: string | null
     body?: string
+    mailboxId?: string
   }
 ): string {
   const id = randomUUID()
   getDb()
     .prepare(
       `INSERT INTO messages
-         (id, lead_id, direction, sequence_step, subject, body, outreach_id,
-          status, error, sent_at, created_at, dry_run)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, lead_id, mailbox_id, direction, sequence_step, subject, body,
+          outreach_id, status, error, sent_at, created_at, dry_run)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       leadId,
+      fields.mailboxId ?? null,
       fields.direction,
       fields.step ?? null,
       "Quick question",
@@ -146,7 +152,7 @@ test("listRecentEvents returns newest first and honours the type filter", () => 
 })
 
 // ---------------------------------------------------------------------------
-// listInboxThreads — only `hot` reaches a human (spec §3)
+// listInboxThreads — what reaches a human (spec §3)
 // ---------------------------------------------------------------------------
 
 test("listInboxThreads surfaces hot leads with their latest inbound", () => {
@@ -165,7 +171,12 @@ test("listInboxThreads surfaces hot leads with their latest inbound", () => {
 })
 
 test("listInboxThreads excludes everything the bot disposed of itself", () => {
-  for (const status of ["contacted", "dead", "suppressed", "unqualified"] as const) {
+  for (const status of [
+    "contacted",
+    "dead",
+    "suppressed",
+    "unqualified",
+  ] as const) {
     seedLead({ status, name: status })
   }
   assert.equal(listInboxThreads().length, 0)
@@ -222,7 +233,12 @@ test("dashboardStats separates real sends from rehearsals", () => {
   const lead = seedLead({ status: "contacted" })
   const dayStart = NOW - 15 * HOUR
   insertMessage(lead, { direction: "out", sentAt: NOW - HOUR, step: 1 })
-  insertMessage(lead, { direction: "out", sentAt: NOW - HOUR, step: 2, dryRun: 1 })
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - HOUR,
+    step: 2,
+    dryRun: 1,
+  })
   const stats = dashboardStats(dayStart, NOW)
   assert.equal(stats.sentToday, 1)
   assert.equal(stats.dryRunToday, 1)
@@ -238,7 +254,11 @@ test("dashboardStats counts inbound replies in the last 7 days only", () => {
 test("dashboardStats reports no bounce rate until there is enough history", () => {
   const lead = seedLead()
   for (let i = 0; i < 5; i++) {
-    insertMessage(lead, { direction: "out", sentAt: NOW - i * HOUR, step: i + 1 })
+    insertMessage(lead, {
+      direction: "out",
+      sentAt: NOW - i * HOUR,
+      step: i + 1,
+    })
   }
   assert.equal(dashboardStats(NOW - 24 * HOUR, NOW).hardBounceRateLast50, null)
 })
@@ -266,4 +286,71 @@ test("dashboardStats counts hot and ready leads by status", () => {
   assert.equal(stats.hotLeads, 2)
   assert.equal(stats.readyToSend, 1)
   assert.equal(stats.totalLeads, 3)
+})
+
+// ---------------------------------------------------------------------------
+// Review findings 3 and 5
+// ---------------------------------------------------------------------------
+
+test("listInboxThreads also surfaces a reply whose classification never ran", () => {
+  // A lead sits at `replied` between the inbound message landing and the
+  // classify task running. If that task fails — no API key, provider down,
+  // retries exhausted — the lead used to stay there invisibly while the inbox
+  // reported that nothing needed attention.
+  const lead = seedLead({ status: "replied" })
+  insertMessage(lead, { direction: "out", sentAt: NOW - 3 * HOUR, step: 1 })
+  insertMessage(lead, {
+    direction: "in",
+    sentAt: NOW - HOUR,
+    body: "who is this?",
+  })
+
+  const threads = listInboxThreads()
+  assert.equal(threads.length, 1)
+  assert.equal(threads[0].lead.id, lead)
+})
+
+test("listInboxThreads puts hot leads above merely-replied ones", () => {
+  seedLead({ status: "replied", name: "Unclassified Co" })
+  const hot = seedLead({ status: "hot", name: "Ready To Talk LLC" })
+  const threads = listInboxThreads()
+  assert.equal(threads.length, 2)
+  assert.equal(threads[0].lead.id, hot, "hot leads come first")
+})
+
+test("countSentToday ignores rehearsals so they cannot eat the real daily cap", () => {
+  const mailbox = upsertMailbox({
+    email: "cap-test@gmail.com",
+    appPassword: "abcd efgh ijkl mnop",
+    dailyCap: 25,
+  })
+  const lead = seedLead()
+  const dayStart = NOW - 12 * HOUR
+
+  for (let i = 0; i < 5; i++) {
+    insertMessage(lead, {
+      direction: "out",
+      sentAt: NOW - i * HOUR,
+      step: 100 + i,
+      dryRun: 1,
+      mailboxId: mailbox.id,
+    })
+  }
+  // The cap protects the sending account's standing with Gmail, and a
+  // rehearsal writes a file without touching the wire. Counting them meant an
+  // afternoon of reading drafts silently spent the day's real quota.
+  assert.equal(countSentToday(mailbox.id, dayStart), 0)
+  assert.equal(countSentToday(mailbox.id, dayStart, { includeDryRun: true }), 5)
+
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - HOUR,
+    step: 200,
+    mailboxId: mailbox.id,
+  })
+  assert.equal(
+    countSentToday(mailbox.id, dayStart),
+    1,
+    "a real send still counts"
+  )
 })

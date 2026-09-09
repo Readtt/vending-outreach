@@ -645,13 +645,27 @@ export function cancelPendingTasksForLead(
  */
 export function countSentToday(
   mailboxId: string,
-  localMidnightEpochMs: number
+  localMidnightEpochMs: number,
+  options: { includeDryRun?: boolean } = {}
 ): number {
   const db = getDb()
+  // Rehearsals do not count against the daily cap.
+  //
+  // They used to. The cap exists to protect the sending account's standing
+  // with Gmail, and a rehearsal writes a file — it never touches the wire, so
+  // it costs that account nothing. Counting them meant an afternoon of
+  // reading drafts silently spent the day's real quota: sending was then
+  // switched on, nothing went out, and the dashboard (which has always
+  // excluded rehearsals) read "Sent today 0 / 25" with no explanation
+  // anywhere.
+  //
+  // `includeDryRun` is for callers asking "how much has this mailbox done",
+  // rather than "may it send now".
+  const dryRunClause = options.includeDryRun ? "" : " AND dry_run = 0"
   const row = db
     .prepare(
       `SELECT count(*) AS n FROM messages
-       WHERE mailbox_id = ? AND status = 'sent' AND sent_at >= ?`
+       WHERE mailbox_id = ? AND status = 'sent' AND sent_at >= ?${dryRunClause}`
     )
     .get(mailboxId, localMidnightEpochMs) as { n: number | bigint }
   return toNumber(row.n)
@@ -1309,15 +1323,24 @@ export interface InboxThread {
 /**
  * The human queue: leads triage or classification escalated.
  *
- * Only `hot` reaches here. Everything the bot can dispose of on its own —
- * a refusal, an existing vendor, an out-of-office — never lands in this list,
- * which is the whole point of the narrow auto-reply action set (spec §3).
+ * Everything the bot can dispose of on its own — a refusal, an existing
+ * vendor, an out-of-office — is suppressed or closed instead, which is the
+ * whole point of the narrow auto-reply action set (spec §3).
+ *
+ * `replied` is included as well as `hot`. A lead sits at `replied` between the
+ * inbound message landing and the classify task running; if that task fails —
+ * no API key, provider down, five retries exhausted — the lead would otherwise
+ * stay there forever, invisible, while the inbox reported that nothing needed
+ * attention. A reply nobody has dispositioned belongs in front of a human even
+ * when the model never got to it.
  */
 export function listInboxThreads(limit = 100): InboxThread[] {
   const leads = getDb()
     .prepare(
-      `SELECT * FROM leads WHERE status = 'hot'
-       ORDER BY COALESCE(created_at, 0) DESC LIMIT ?`
+      `SELECT * FROM leads WHERE status IN ('hot', 'replied')
+       ORDER BY CASE status WHEN 'hot' THEN 0 ELSE 1 END,
+                COALESCE(created_at, 0) DESC
+       LIMIT ?`
     )
     .all(limit) as unknown as LeadRow[]
 
@@ -1377,7 +1400,10 @@ export function listCallList(
           AND first_sent <= ? AND first_sent >= ?
         ORDER BY first_sent ASC`
     )
-    .all(now - minHours * 3600_000, now - maxHours * 3600_000) as unknown as (LeadRow & {
+    .all(
+      now - minHours * 3600_000,
+      now - maxHours * 3600_000
+    ) as unknown as (LeadRow & {
     first_sent: number
   })[]
 
@@ -1409,7 +1435,9 @@ export function dashboardStats(
 ): DashboardStats {
   const db = getDb()
   const scalar = (sql: string, ...params: (string | number)[]): number =>
-    Number((db.prepare(sql).get(...params) as { n: number } | undefined)?.n ?? 0)
+    Number(
+      (db.prepare(sql).get(...params) as { n: number } | undefined)?.n ?? 0
+    )
 
   const sentToday = scalar(
     `SELECT count(*) AS n FROM messages
@@ -1486,7 +1514,9 @@ export interface TaskQueueSummary {
 export function taskQueueSummary(): TaskQueueSummary {
   const db = getDb()
   const rows = db
-    .prepare(`SELECT status, kind, count(*) AS n FROM tasks GROUP BY status, kind`)
+    .prepare(
+      `SELECT status, kind, count(*) AS n FROM tasks GROUP BY status, kind`
+    )
     .all() as unknown as { status: string; kind: string; n: number }[]
 
   const summary: TaskQueueSummary = {
