@@ -23,7 +23,11 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { deleteMailboxAction, saveMailboxAction } from "./actions"
+import {
+  deleteMailboxAction,
+  saveMailboxAction,
+  testMailboxConnectionAction,
+} from "./actions"
 import type { MailboxPublic } from "./types"
 
 interface MailboxesSectionProps {
@@ -37,8 +41,10 @@ export function MailboxesSection({ mailboxes }: MailboxesSectionProps) {
         <div>
           <CardTitle>Mailboxes</CardTitle>
           <CardDescription>
-            Gmail address and app password. The mail layer (send/receive)
-            lives elsewhere — this only stores credentials and the daily cap.
+            Gmail address and app password. Test the connection before your
+            first send — it checks sending and receiving separately, because an
+            account can send fine while IMAP is switched off, and then every
+            reply is silently lost.
           </CardDescription>
         </div>
         <MailboxDialog triggerLabel="Add mailbox" />
@@ -73,16 +79,30 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
   }
 
   function handleTestConnection() {
-    // TODO(mail-layer agent): wire this up to the real SMTP/IMAP layer once
-    // it exists (lib/mail.ts or similar). It should attempt an SMTP login
-    // (and probably an IMAP login) for this mailbox and report success or
-    // failure — it must never send an actual email. Deliberately stubbed
-    // here; the mail layer is a different agent's work.
     setTesting(true)
-    setTimeout(() => {
-      setTesting(false)
-      toast.info("Test connection isn't wired up yet — the mail layer is built separately.")
-    }, 400)
+    testMailboxConnectionAction(mailbox.id)
+      .then((result) => {
+        if (result.ok) {
+          toast.success(
+            `${mailbox.email} is ready — sending and receiving both work.`
+          )
+          return
+        }
+        // Report each leg separately. "It failed" is useless when SMTP is fine
+        // and IMAP is switched off in the Gmail account, which is a common and
+        // very confusing state: mail goes out, replies never come back.
+        const failures = [
+          result.smtp.ok ? null : `Sending (SMTP): ${result.smtp.error}`,
+          result.imap.ok ? null : `Receiving (IMAP): ${result.imap.error}`,
+        ].filter((line): line is string => line !== null)
+        toast.error(failures.join("\n\n"), { duration: 15_000 })
+      })
+      .catch((err: unknown) =>
+        toast.error(
+          err instanceof Error ? err.message : "Connection test failed."
+        )
+      )
+      .finally(() => setTesting(false))
   }
 
   return (
@@ -99,10 +119,19 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Button variant="ghost" size="sm" onClick={handleTestConnection} disabled={testing}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleTestConnection}
+          disabled={testing}
+        >
           {testing ? "Testing…" : "Test connection"}
         </Button>
-        <MailboxDialog mailbox={mailbox} triggerLabel="Edit" triggerVariant="ghost" />
+        <MailboxDialog
+          mailbox={mailbox}
+          triggerLabel="Edit"
+          triggerVariant="ghost"
+        />
         {confirming ? (
           <>
             <Button
@@ -113,7 +142,11 @@ function MailboxRow({ mailbox }: { mailbox: MailboxPublic }) {
             >
               Confirm
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirming(false)}
+            >
               Cancel
             </Button>
           </>
@@ -204,7 +237,11 @@ function MailboxDialog({
               type="password"
               value={appPassword}
               onChange={(e) => setAppPassword(e.target.value)}
-              placeholder={isEdit ? "Leave blank to keep unchanged" : "16-character app password"}
+              placeholder={
+                isEdit
+                  ? "Leave blank to keep unchanged"
+                  : "16-character app password"
+              }
               autoComplete="off"
             />
           </div>

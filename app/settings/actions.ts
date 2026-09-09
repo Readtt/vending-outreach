@@ -12,11 +12,22 @@ import { revalidatePath } from "next/cache"
 import {
   deleteMailbox as deleteMailboxRow,
   deleteProvider as deleteProviderRow,
+  getMailboxById,
   upsertMailbox,
   upsertProvider,
   type ProviderKind,
 } from "@/lib/db"
-import { AI_ROLES, clearRoleModel, getRoleModel, setRoleModel, type AiRole } from "@/lib/ai"
+import {
+  verifyMailboxCredentials,
+  type MailboxCheckResult,
+} from "@/lib/mail-verify"
+import {
+  AI_ROLES,
+  clearRoleModel,
+  getRoleModel,
+  setRoleModel,
+  type AiRole,
+} from "@/lib/ai"
 import {
   BUSINESS_TYPE_IDS,
   DEFAULT_ABOUT_SETTINGS,
@@ -61,7 +72,9 @@ export interface SaveProviderInput {
   baseUrl: string
 }
 
-export async function saveProviderAction(input: SaveProviderInput): Promise<void> {
+export async function saveProviderAction(
+  input: SaveProviderInput
+): Promise<void> {
   const kind = input.kind
   const label = input.label.trim() || defaultLabelForKind(kind)
   const baseUrl = input.baseUrl.trim()
@@ -124,7 +137,9 @@ export interface SaveMailboxInput {
   dailyCap: number
 }
 
-export async function saveMailboxAction(input: SaveMailboxInput): Promise<void> {
+export async function saveMailboxAction(
+  input: SaveMailboxInput
+): Promise<void> {
   const email = input.email.trim().toLowerCase()
   const appPassword = input.appPassword.trim()
   const isNew = !input.id
@@ -159,7 +174,9 @@ export async function deleteMailboxAction(id: string): Promise<void> {
 // Sending
 // ---------------------------------------------------------------------------
 
-export async function saveSendingSettingsAction(formData: FormData): Promise<void> {
+export async function saveSendingSettingsAction(
+  formData: FormData
+): Promise<void> {
   const emailsPerDay = clamp(
     formNumber(formData, "emailsPerDay", DEFAULT_SENDING_SETTINGS.emailsPerDay),
     1,
@@ -216,7 +233,9 @@ export async function saveSendingSettingsAction(formData: FormData): Promise<voi
 // Targeting
 // ---------------------------------------------------------------------------
 
-export async function saveTargetingSettingsAction(formData: FormData): Promise<void> {
+export async function saveTargetingSettingsAction(
+  formData: FormData
+): Promise<void> {
   const location = formString(formData, "location")
   const radiusMiles = clamp(
     formNumber(formData, "radiusMiles", DEFAULT_TARGETING_SETTINGS.radiusMiles),
@@ -226,13 +245,17 @@ export async function saveTargetingSettingsAction(formData: FormData): Promise<v
   const businessTypes = formData
     .getAll("businessTypes")
     .filter((v): v is string => typeof v === "string")
-    .filter((v): v is BusinessTypeId => (BUSINESS_TYPE_IDS as string[]).includes(v))
+    .filter((v): v is BusinessTypeId =>
+      (BUSINESS_TYPE_IDS as string[]).includes(v)
+    )
 
   const settings: TargetingSettings = {
     location,
     radiusMiles,
     businessTypes:
-      businessTypes.length > 0 ? businessTypes : DEFAULT_TARGETING_SETTINGS.businessTypes,
+      businessTypes.length > 0
+        ? businessTypes
+        : DEFAULT_TARGETING_SETTINGS.businessTypes,
   }
   saveTargetingSettings(settings)
   revalidatePath("/settings")
@@ -242,13 +265,17 @@ export async function saveTargetingSettingsAction(formData: FormData): Promise<v
 // About you
 // ---------------------------------------------------------------------------
 
-export async function saveAboutSettingsAction(formData: FormData): Promise<void> {
+export async function saveAboutSettingsAction(
+  formData: FormData
+): Promise<void> {
   const address = formString(formData, "address")
   if (!address) {
     // Required for CAN-SPAM — every commercial email must carry a physical
     // address. The form also marks this field `required` client-side; this
     // is the server-side backstop.
-    throw new Error("Physical address is required (CAN-SPAM requires it on every email).")
+    throw new Error(
+      "Physical address is required (CAN-SPAM requires it on every email)."
+    )
   }
 
   const settings: AboutSettings = {
@@ -256,8 +283,30 @@ export async function saveAboutSettingsAction(formData: FormData): Promise<void>
     company: formString(formData, "company"),
     phone: formString(formData, "phone"),
     address,
-    offerTerms: formString(formData, "offerTerms") || DEFAULT_ABOUT_SETTINGS.offerTerms,
+    offerTerms:
+      formString(formData, "offerTerms") || DEFAULT_ABOUT_SETTINGS.offerTerms,
   }
   saveAboutSettings(settings)
   revalidatePath("/settings")
+}
+
+/**
+ * Authenticates a saved mailbox against Gmail SMTP and IMAP.
+ *
+ * Runs server-side so the app password never leaves the machine, and checks
+ * both legs because they fail independently: sending can work while IMAP is
+ * switched off in the account, and that combination looks fine right up until
+ * every reply and every bounce is silently lost.
+ *
+ * Sends nothing. There is no path from here to an outgoing message.
+ */
+export async function testMailboxConnectionAction(
+  mailboxId: string
+): Promise<MailboxCheckResult> {
+  const mailbox = getMailboxById(mailboxId)
+  if (!mailbox) {
+    const error = "That mailbox is no longer saved. Reload the page."
+    return { smtp: { ok: false, error }, imap: { ok: false, error }, ok: false }
+  }
+  return verifyMailboxCredentials(mailbox.email, mailbox.app_password)
 }
