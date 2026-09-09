@@ -127,6 +127,7 @@ export function CallCard({ item }: { item: CallListItem }) {
         )}
         <Button
           render={<Link href={`/packet/${item.id}`} target="_blank" />}
+          nativeButton={false}
           size="xs"
           variant="ghost"
         >

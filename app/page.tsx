@@ -315,7 +315,12 @@ function GetStarted() {
             Gmail mailbox (for sending them), and your physical address under
             &quot;About you&quot; for CAN-SPAM.
           </p>
-          <Button render={<Link href="/settings" />} size="sm" className="mt-2">
+          <Button
+            render={<Link href="/settings" />}
+            nativeButton={false}
+            size="sm"
+            className="mt-2"
+          >
             Go to Settings
           </Button>
         </li>
@@ -327,6 +332,7 @@ function GetStarted() {
           </p>
           <Button
             render={<Link href="/leads" />}
+            nativeButton={false}
             size="sm"
             variant="outline"
             className="mt-2"
