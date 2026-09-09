@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { formatPhone } from "@/lib/geo"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import {
@@ -97,6 +98,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Kind</TableHead>
+              <TableHead>Where</TableHead>
               <TableHead>Stage</TableHead>
               <TableHead title={LEAD_FIT_EXPLANATION}>Fit</TableHead>
               <TableHead>Email</TableHead>
@@ -108,7 +110,7 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
             {filtered.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground"
                 >
                   Nothing matches.
@@ -121,14 +123,19 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                 className="cursor-pointer"
                 onClick={() => setSelectedId(item.id)}
               >
-                <TableCell
-                  className="max-w-48 truncate font-medium"
-                  title={item.name ?? undefined}
-                >
-                  {item.name ?? "No name"}
+                <TableCell className="font-medium">
+                  <span
+                    className="block max-w-48 truncate"
+                    title={item.name ?? undefined}
+                  >
+                    {item.name ?? "No name"}
+                  </span>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {item.type ?? "—"}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {item.location || "—"}
                 </TableCell>
                 <TableCell>
                   <Badge variant={LEAD_STATUS_BADGE_VARIANT[item.status]}>
@@ -142,16 +149,23 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                   {leadFit(item.score)}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {item.email ?? "—"}
+                  <span
+                    className="block max-w-56 truncate"
+                    title={item.email ?? undefined}
+                  >
+                    {item.email ?? "—"}
+                  </span>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  {formatPhone(item.phone) || "—"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {item.phone ?? "—"}
-                </TableCell>
-                <TableCell
-                  className="max-w-64 truncate text-muted-foreground"
-                  title={item.fact ?? undefined}
-                >
-                  {item.fact ?? "—"}
+                  <span
+                    className="block max-w-64 truncate"
+                    title={item.fact ?? undefined}
+                  >
+                    {item.fact ?? "—"}
+                  </span>
                 </TableCell>
               </TableRow>
             ))}

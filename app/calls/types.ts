@@ -8,6 +8,8 @@ export interface CallListItem {
   name: string | null
   type: string | null
   phone: string
+  /** "Columbus, OH" — the caller wants to know whose morning this is. */
+  location: string
   hoursSinceContact: number
   fact: string | null
   lastEmailSubject: string | null

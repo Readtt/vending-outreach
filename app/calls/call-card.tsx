@@ -4,6 +4,8 @@ import { useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { formatElapsed } from "@/lib/format"
+import { formatPhone } from "@/lib/geo"
 import { Button } from "@/components/ui/button"
 import { generateCallScriptAction, setCallOutcomeAction } from "./actions"
 import {
@@ -62,15 +64,16 @@ export function CallCard({ item }: { item: CallListItem }) {
             {item.name ?? "Unnamed business"}
           </h2>
           <p className="text-xs text-muted-foreground">
-            {item.type ? `${item.type} · ` : ""}
-            emailed {item.hoursSinceContact} hours ago
+            {[item.type, item.location].filter(Boolean).join(" · ")}
+            {item.type || item.location ? " · " : ""}
+            last emailed {formatElapsed(item.hoursSinceContact)} ago
           </p>
         </div>
         <a
           href={`tel:${item.phone}`}
           className="shrink-0 text-sm font-medium text-primary underline underline-offset-2"
         >
-          {item.phone}
+          {formatPhone(item.phone)}
         </a>
       </div>
 

@@ -6,6 +6,7 @@
  */
 
 import { countLeads, listLeads } from "@/lib/db"
+import { shortLocation } from "@/lib/format"
 import { TARGET_TYPES, TYPE_LABELS, type LeadType } from "@/lib/osm"
 import type { BusinessTypeOption, LeadListItem } from "./types"
 
@@ -36,6 +37,7 @@ export function getLeadListData(): LeadListData {
       email: r.email,
       phone: r.phone,
       fact: r.personalization_fact,
+      location: shortLocation(r.address),
     })),
   }
 }

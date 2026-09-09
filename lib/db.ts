@@ -1425,7 +1425,7 @@ export function listInboxThreads(limit = 100): InboxThread[] {
 
 export interface CallListEntry {
   lead: LeadRow
-  firstContactedAt: number
+  lastContactedAt: number
   hoursSinceContact: number
 }
 
@@ -1437,6 +1437,14 @@ export interface CallListEntry {
  * drop every lead contacted on a day the machine was asleep. Operators describe
  * the play as "call the day after you make contact"; a few days of slack
  * preserves that without losing anyone.
+ *
+ * Measured from the MOST RECENT email, not the first. Keying off the first one
+ * meant a lead had exactly one window, ever: miss it, and the day-4 and day-9
+ * follow-ups came and went with no call prompt behind either of them, and the
+ * lead was permanently uncallable. That is the same "the laptop was closed"
+ * failure the 96-hour window exists to prevent, so it should not survive one
+ * layer down. Each step of the sequence now opens its own window the day
+ * after it goes out.
  */
 export function listCallList(
   now: number = Date.now(),
@@ -1446,10 +1454,11 @@ export function listCallList(
   const maxHours = options.maxHours ?? 96
   const rows = getDb()
     .prepare(
-      `SELECT l.*, MIN(m.sent_at) AS first_sent
+      `SELECT l.*, MAX(m.sent_at) AS last_sent
          FROM leads l
          JOIN messages m
            ON m.lead_id = l.id AND m.direction = 'out' AND m.status = 'sent'
+              AND m.sequence_step IS NOT NULL
         WHERE l.phone IS NOT NULL AND trim(l.phone) <> ''
           AND l.status IN ('contacted', 'replied')
           AND NOT EXISTS (
@@ -1457,23 +1466,23 @@ export function listCallList(
              WHERE i.lead_id = l.id AND i.direction = 'in'
           )
         GROUP BY l.id
-       HAVING first_sent IS NOT NULL
-          AND first_sent <= ? AND first_sent >= ?
-        ORDER BY first_sent ASC`
+       HAVING last_sent IS NOT NULL
+          AND last_sent <= ? AND last_sent >= ?
+        ORDER BY last_sent ASC`
     )
     .all(
       now - minHours * 3600_000,
       now - maxHours * 3600_000
     ) as unknown as (LeadRow & {
-    first_sent: number
+    last_sent: number
   })[]
 
   return rows.map((row) => {
-    const { first_sent, ...lead } = row
+    const { last_sent, ...lead } = row
     return {
       lead: lead as LeadRow,
-      firstContactedAt: first_sent,
-      hoursSinceContact: Math.floor((now - first_sent) / 3600_000),
+      lastContactedAt: last_sent,
+      hoursSinceContact: Math.floor((now - last_sent) / 3600_000),
     }
   })
 }
@@ -1644,8 +1653,12 @@ export function engineStatus(now: number = Date.now()): EngineStatus {
 export interface DailyActivityPoint {
   /** Local calendar day, `YYYY-MM-DD`. */
   date: string
-  /** Real emails sent that day. Rehearsals are excluded on purpose. */
+  /** Real emails that left the machine that day. */
   sent: number
+  /** Rehearsals filed to `outbox-dryrun/` that day. Kept separate from `sent`
+   * so the chart can show the practice period without ever implying that
+   * anything reached a stranger. */
+  rehearsed: number
   /** Replies that arrived that day. */
   replies: number
 }
@@ -1660,6 +1673,14 @@ function localDayKey(epochMs: number): string {
 /**
  * Emails sent and replies received per day over the last `days` days, oldest
  * first, with quiet days present as zeroes rather than missing.
+ *
+ * Rehearsals are counted, in their own series. The app ships with sending
+ * off, and the setup guide tells you to leave it off until you have read what
+ * it wrote — so the whole period when someone most needs to see that this
+ * thing is working is a period with no real sends in it at all. Counting only
+ * real ones left the chart reading "Nothing sent yet" through days of the
+ * engine happily writing and filing emails, which is the same thing it says
+ * when the engine is dead.
  *
  * The day buckets are built here in JS and matched against SQLite's
  * `localtime`; both read the same OS timezone, which is the right clock for
@@ -1691,6 +1712,14 @@ export function dailyActivity(
         AND sent_at >= ?
       GROUP BY day`
   )
+  const rehearsed = countByDay(
+    `SELECT strftime('%Y-%m-%d', sent_at / 1000, 'unixepoch', 'localtime') AS day,
+            count(*) AS n
+       FROM messages
+      WHERE direction = 'out' AND status = 'sent' AND dry_run = 1
+        AND sent_at >= ?
+      GROUP BY day`
+  )
   const replies = countByDay(
     `SELECT strftime('%Y-%m-%d', COALESCE(sent_at, created_at) / 1000, 'unixepoch', 'localtime') AS day,
             count(*) AS n
@@ -1707,6 +1736,7 @@ export function dailyActivity(
     points.push({
       date,
       sent: sent.get(date) ?? 0,
+      rehearsed: rehearsed.get(date) ?? 0,
       replies: replies.get(date) ?? 0,
     })
   }

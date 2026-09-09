@@ -229,11 +229,15 @@ function Tiles({ tiles }: { tiles: DashboardTiles }) {
 }
 
 function Chart({ points }: { points: DailyActivityPoint[] }) {
-  const total = points.reduce((sum, p) => sum + p.sent, 0)
+  // Rehearsals count towards "is anything happening", which is the question
+  // this card answers. Otherwise it reads as dead for the whole practice
+  // period, which is most of the first week.
+  const total = points.reduce((sum, p) => sum + p.sent + p.rehearsed, 0)
   if (total === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Nothing sent yet. Once emails start going out, this fills in.
+        Nothing written yet. Once the engine starts working through your leads,
+        this fills in — practice runs included.
       </p>
     )
   }

@@ -72,14 +72,7 @@ export function humanizeBreakerName(breaker: string): string {
   return labels[breaker] ?? breaker.replace(/_/g, " ")
 }
 
-export function formatDateTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
-}
+export { formatDateTime } from "@/lib/format"
 
 export function formatPercent(fraction: number): string {
   return `${Math.round(fraction * 100)}%`

@@ -12,7 +12,8 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "test": "node --disable-warning=ExperimentalWarning --test \"lib/**/*.test.ts\" \"worker/**/*.test.ts\""
+    "test": "node --disable-warning=ExperimentalWarning --test \"lib/**/*.test.ts\" \"worker/**/*.test.ts\"",
+    "seed:demo": "node --disable-warning=ExperimentalWarning scripts/seed-demo.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.50",

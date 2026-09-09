@@ -3,6 +3,7 @@
  */
 
 import { listCallList, listMessagesForLead } from "@/lib/db"
+import { shortLocation } from "@/lib/format"
 import type { CallListItem } from "./types"
 
 /** `leads.research_json` holds whatever each stage has merged into it —
@@ -41,6 +42,7 @@ export function getCallListItems(now: number = Date.now()): CallListItem[] {
       type: lead.type,
       // listCallList's own WHERE clause guarantees a non-empty phone.
       phone: lead.phone ?? "",
+      location: shortLocation(lead.address),
       hoursSinceContact,
       fact: lead.personalization_fact,
       lastEmailSubject: lastOutbound?.subject ?? null,

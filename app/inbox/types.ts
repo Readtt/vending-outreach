@@ -33,16 +33,6 @@ export interface ThreadDetail {
  * needs the full status vocabulary — see `actions.ts` for the mapping. */
 export type ThreadOutcome = "won" | "dead" | "nurture"
 
-export function formatDateTime(epochMs: number | null): string {
-  if (epochMs === null) return ""
-  return new Date(epochMs).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
-}
-
 export function snippet(text: string | null, maxLen = 140): string {
   if (!text) return ""
   const collapsed = text.replace(/\s+/g, " ").trim()
@@ -50,3 +40,5 @@ export function snippet(text: string | null, maxLen = 140): string {
     ? `${collapsed.slice(0, maxLen)}…`
     : collapsed
 }
+
+export { formatDateTime } from "@/lib/format"

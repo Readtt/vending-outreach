@@ -28,6 +28,8 @@ export interface LeadListItem {
   email: string | null
   phone: string | null
   fact: string | null
+  /** "Columbus, OH" — enough to tell two searches apart at a glance. */
+  location: string
 }
 
 export interface BusinessTypeOption {
@@ -75,16 +77,6 @@ export interface LeadDetail {
   factCategory: string | null
   messages: LeadMessageItem[]
   events: LeadEventItem[]
-}
-
-export function formatDateTime(epochMs: number | null): string {
-  if (epochMs === null) return ""
-  return new Date(epochMs).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
 }
 
 /** Plain-language names for each stage a lead can be at. */
@@ -141,3 +133,5 @@ export function leadFit(score: number): LeadFit {
 
 export const LEAD_FIT_EXPLANATION =
   "Based on the kind of business, its opening hours, and how much we could find out about it."
+
+export { formatDateTime } from "@/lib/format"

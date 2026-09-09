@@ -485,7 +485,12 @@ test("searchOverpass maps elements, way centers included", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["storage"], US, deps(stub.fn))
+  const found = await searchOverpass(
+    freshBBox(),
+    ["storage"],
+    US,
+    deps(stub.fn)
+  )
   assert.equal(found.length, 1)
   assert.deepEqual(found[0], {
     osmId: "way/42",
@@ -534,7 +539,12 @@ test("searchOverpass drops unnamed elements", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["warehouse"], US, deps(stub.fn))
+  const found = await searchOverpass(
+    freshBBox(),
+    ["warehouse"],
+    US,
+    deps(stub.fn)
+  )
   assert.deepEqual(
     found.map((c) => c.name),
     ["Real Warehouse"]
@@ -555,7 +565,12 @@ test("searchOverpass drops elements with no coordinates or no matching tag", asy
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["warehouse"], US, deps(stub.fn))
+  const found = await searchOverpass(
+    freshBBox(),
+    ["warehouse"],
+    US,
+    deps(stub.fn)
+  )
   assert.deepEqual(
     found.map((c) => c.osmId),
     ["node/9"]
@@ -640,7 +655,12 @@ test("address is null without a street", async () => {
       ],
     }),
   ])
-  const found = await searchOverpass(freshBBox(), ["laundry"], US, deps(stub.fn))
+  const found = await searchOverpass(
+    freshBBox(),
+    ["laundry"],
+    US,
+    deps(stub.fn)
+  )
   assert.equal(found[0].address, null)
 })
 
@@ -710,7 +730,12 @@ test("a 504 is retried, and a success on the retry is returned", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn, slept))
+  const found = await searchOverpass(
+    freshBBox(),
+    ["gym"],
+    US,
+    deps(stub.fn, slept)
+  )
   assert.deepEqual(
     found.map((c) => c.name),
     ["Slow Gym"]

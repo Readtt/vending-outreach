@@ -240,6 +240,71 @@ test("listCallList ignores an unsent draft", () => {
   assert.equal(listCallList(NOW).length, 0)
 })
 
+test("listCallList measures from the most recent email, not the first", () => {
+  // Step 1 went out nine days ago, well outside the window. The day-4
+  // follow-up went out yesterday. Keying off the first send left this lead
+  // permanently uncallable even though we had just emailed them.
+  const lead = seedLead({ status: "contacted" })
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - 9 * 24 * HOUR,
+    step: 1,
+  })
+  insertMessage(lead, { direction: "out", sentAt: NOW - 26 * HOUR, step: 4 })
+
+  const calls = listCallList(NOW)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].hoursSinceContact, 26)
+  assert.equal(calls[0].lastContactedAt, NOW - 26 * HOUR)
+})
+
+test("listCallList holds a lead back until the newest email has had time to land", () => {
+  // Emailed nine days ago and again twenty minutes ago: too soon to phone.
+  const lead = seedLead({ status: "contacted" })
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - 9 * 24 * HOUR,
+    step: 1,
+  })
+  insertMessage(lead, { direction: "out", sentAt: NOW - 20 * 60_000, step: 4 })
+  assert.equal(listCallList(NOW).length, 0)
+})
+
+test("listCallList ignores sends that are not part of the sequence", () => {
+  // A fixed auto-reply carries no sequence_step. It is not an outreach email,
+  // so it must not reset the clock on when to phone someone.
+  const lead = seedLead({ status: "contacted" })
+  insertMessage(lead, { direction: "out", sentAt: NOW - 30 * HOUR, step: 1 })
+  insertMessage(lead, { direction: "out", sentAt: NOW - HOUR, step: null })
+
+  const calls = listCallList(NOW)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].hoursSinceContact, 30)
+})
+
+test("dailyActivity keeps rehearsals in their own series", () => {
+  // The chart is blank through the whole practice period if rehearsals are
+  // dropped, which is the period someone most needs to see it working.
+  const lead = seedLead({ status: "contacted" })
+  insertMessage(lead, { direction: "out", sentAt: NOW - HOUR, step: 1 })
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - 2 * HOUR,
+    step: 4,
+    dryRun: 1,
+  })
+  insertMessage(lead, {
+    direction: "out",
+    sentAt: NOW - 3 * HOUR,
+    step: 9,
+    dryRun: 1,
+  })
+
+  const today = dailyActivity(14, NOW).at(-1)
+  assert.equal(today?.sent, 1)
+  assert.equal(today?.rehearsed, 2)
+})
+
 // ---------------------------------------------------------------------------
 // dashboardStats
 // ---------------------------------------------------------------------------
@@ -420,13 +485,15 @@ test("dailyActivity counts real sends and replies on the right day", () => {
   assert.equal(today?.replies, 1)
 })
 
-test("dailyActivity leaves rehearsals out of the chart", () => {
-  // The chart answers "is real email going out?", so a dry run must not draw
-  // a bar that makes it look like it is.
+test("dailyActivity never counts a rehearsal as a real send", () => {
+  // Rehearsals are drawn, but never in `sent`. That field is what the rest of
+  // the app reads as "email left this machine", and a dry run did not.
   const leadId = seedLead()
   insertMessage(leadId, { direction: "out", sentAt: NOW, dryRun: 1 })
 
-  assert.equal(dailyActivity(14, NOW).at(-1)?.sent, 0)
+  const today = dailyActivity(14, NOW).at(-1)
+  assert.equal(today?.sent, 0)
+  assert.equal(today?.rehearsed, 1)
 })
 
 test("dailyActivity ignores anything older than the window", () => {

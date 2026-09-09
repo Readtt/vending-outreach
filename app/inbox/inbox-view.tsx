@@ -4,6 +4,7 @@ import { useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { EmptyState } from "@/components/page"
+import { formatPhone } from "@/lib/geo"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { setThreadOutcomeAction } from "./actions"
@@ -94,7 +95,7 @@ export function InboxView({ threads }: InboxViewProps) {
               {selected.name ?? "Unnamed business"}
             </h2>
             <p className="text-xs text-muted-foreground">
-              {[selected.type, selected.phone, selected.email]
+              {[selected.type, formatPhone(selected.phone), selected.email]
                 .filter(Boolean)
                 .join(" · ") || "No contact details on file."}
             </p>
