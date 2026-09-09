@@ -12,7 +12,7 @@
  * never a value import from `./db`.
  */
 
-import type { ProviderKind } from "./db"
+import type { ProviderKind } from "./db.ts"
 
 // ---------------------------------------------------------------------------
 // Roles

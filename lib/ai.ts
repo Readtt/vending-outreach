@@ -28,7 +28,7 @@ import {
   logEvent,
   setSetting,
   type ProviderRow,
-} from "./db"
+} from "./db.ts"
 
 /**
  * An error from resolving/listing models, carrying an HTTP-status-shaped
@@ -108,13 +108,13 @@ export function getModel(providerId: string, modelId: string): LanguageModel {
 // server-side caller can keep importing everything from "@/lib/ai".
 // ---------------------------------------------------------------------------
 
-export * from "./ai-roles"
+export * from "./ai-roles.ts"
 import {
   ROLE_LABELS,
   type AiRole,
   type ModelSummary,
   type RoleModelSetting,
-} from "./ai-roles"
+} from "./ai-roles.ts"
 
 function roleSettingKey(role: AiRole): string {
   return `ai.role.${role}`
@@ -229,7 +229,8 @@ export async function listModels(providerId: string): Promise<ModelSummary[]> {
   const label = p.label ?? p.id
 
   if (p.kind === "anthropic") {
-    if (!p.api_key) throw new ModelListError(`Provider "${label}" has no API key set.`, 400)
+    if (!p.api_key)
+      throw new ModelListError(`Provider "${label}" has no API key set.`, 400)
     let res: Response
     try {
       res = await fetchWithTimeout("https://api.anthropic.com/v1/models", {
@@ -242,14 +243,17 @@ export async function listModels(providerId: string): Promise<ModelSummary[]> {
       throw wrapNetworkError("Anthropic", err)
     }
     if (!res.ok) {
-      throw new Error(`Anthropic rejected the request: ${await readableErrorFromResponse(res)}`)
+      throw new Error(
+        `Anthropic rejected the request: ${await readableErrorFromResponse(res)}`
+      )
     }
     const body = (await res.json()) as AnthropicModelsResponse
     return body.data.map((m) => ({ id: m.id, name: m.display_name }))
   }
 
   if (p.kind === "google") {
-    if (!p.api_key) throw new ModelListError(`Provider "${label}" has no API key set.`, 400)
+    if (!p.api_key)
+      throw new ModelListError(`Provider "${label}" has no API key set.`, 400)
     let res: Response
     try {
       res = await fetchWithTimeout(
@@ -260,7 +264,9 @@ export async function listModels(providerId: string): Promise<ModelSummary[]> {
       throw wrapNetworkError("Google", err)
     }
     if (!res.ok) {
-      throw new Error(`Google rejected the request: ${await readableErrorFromResponse(res)}`)
+      throw new Error(
+        `Google rejected the request: ${await readableErrorFromResponse(res)}`
+      )
     }
     const body = (await res.json()) as GoogleModelsResponse
     return body.models
@@ -276,7 +282,8 @@ export async function listModels(providerId: string): Promise<ModelSummary[]> {
   }
 
   // openai_compatible
-  if (!p.base_url) throw new ModelListError(`Provider "${label}" has no base URL set.`, 400)
+  if (!p.base_url)
+    throw new ModelListError(`Provider "${label}" has no base URL set.`, 400)
   const url = `${p.base_url.replace(/\/+$/, "")}/models`
   let res: Response
   try {
@@ -287,7 +294,9 @@ export async function listModels(providerId: string): Promise<ModelSummary[]> {
     throw wrapNetworkError(label, err)
   }
   if (!res.ok) {
-    throw new Error(`${label} rejected the request: ${await readableErrorFromResponse(res)}`)
+    throw new Error(
+      `${label} rejected the request: ${await readableErrorFromResponse(res)}`
+    )
   }
   const body = (await res.json()) as OpenAICompatibleModelsResponse
   if (!Array.isArray(body.data)) {
@@ -356,7 +365,13 @@ export async function generateGuarded<T>(
 
   try {
     if (schema) {
-      const result = await generateObject({ model, schema, schemaName, system, prompt })
+      const result = await generateObject({
+        model,
+        schema,
+        schemaName,
+        system,
+        prompt,
+      })
       const latencyMs = Date.now() - startedAt
       logEvent("ai_call", {
         leadId,
