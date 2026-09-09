@@ -55,3 +55,10 @@ next-env.d.ts
 # scratch / saved pages
 /yt1.html
 /*.local.md
+
+# Runtime data — the SQLite database and anything else the app writes.
+# Kept inside the project on purpose (see lib/paths.ts) and never committed.
+/data/
+*.db
+*.db-wal
+*.db-shm

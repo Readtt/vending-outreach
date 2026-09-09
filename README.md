@@ -116,8 +116,15 @@ side feature.
 | No emails going out                        | Sending is off (that is the default), the first 20 still need approving on the Leads page, it is outside 9am to 4pm on a weekday, or you have hit today's limit. |
 | "Sent today 5 / 5" and it stopped          | The slow start. New accounts begin at 5 a day and climb on days you actually send. The tile says what it is climbing toward.                                     |
 
-Your data lives in `%LOCALAPPDATA%\vending-outreach\app.db`, deliberately outside
-this folder. OneDrive corrupts databases it tries to sync.
+Your data lives in `data/app.db`, inside this folder. Everything the app writes
+stays here — the database, the dry-run outbox, the STOP file — so the whole
+installation is one folder you can copy, back up, or delete.
+
+One caveat if this folder is inside OneDrive, Dropbox, or Google Drive: a
+database is three files that have to stay in step, and a sync client copies them
+one at a time. It prints a warning on startup if it spots that. Either exclude
+`data/` in the sync client's settings, or point `VENDING_DB_PATH` at somewhere
+unsynced.
 
 ## Commands
 

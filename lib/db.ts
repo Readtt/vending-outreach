@@ -11,40 +11,56 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
+import { dataDir, describeSyncRisk } from "./paths.ts"
+
 // ---------------------------------------------------------------------------
-// Path resolution (spec §0.2 — hard invariant)
+// Path resolution — everything this app writes stays under the project folder
 // ---------------------------------------------------------------------------
 
-function resolveDbPath(): string {
+let syncWarningShown = false
+
+/**
+ * Warns once per process when the database sits in a folder a cloud client
+ * syncs. Deliberately not an exception: refusing to start would mean this app
+ * cannot live in Documents on a machine where Documents is OneDrive, which is
+ * the default on Windows and not something a user of this app chose.
+ */
+function warnIfSynced(dbPath: string): void {
+  if (syncWarningShown) return
+  const vendor = describeSyncRisk(dbPath)
+  if (!vendor) return
+  syncWarningShown = true
+  console.warn(
+    [
+      "",
+      `  Heads up: your data lives in a folder ${vendor} is syncing.`,
+      `    ${dbPath}`,
+      "  A database is three files that have to stay in step (app.db plus a",
+      "  -wal and a -shm sidecar), and a sync client copies them one at a",
+      "  time, so a sync landing mid-write can leave them disagreeing.",
+      "  Two ways out, either is fine:",
+      `    - Exclude the "data" folder in ${vendor}'s settings.`,
+      "    - Or point VENDING_DB_PATH at somewhere unsynced, for example",
+      "      VENDING_DB_PATH=C:/vending-outreach/app.db",
+      "",
+    ].join("\n")
+  )
+}
+
+/**
+ * The database file. Defaults to `data/app.db` inside the project folder, so
+ * one folder holds the code and everything it produces. `VENDING_DB_PATH`
+ * overrides it — that is what the tests use, and what to reach for if the
+ * project folder is being synced.
+ */
+export function resolveDbPath(): string {
   const override = process.env.VENDING_DB_PATH?.trim()
-  let dbPath: string
-
-  if (override) {
-    dbPath = path.resolve(override)
-  } else {
-    const localAppData = process.env.LOCALAPPDATA
-    if (!localAppData) {
-      throw new Error(
-        "Cannot resolve a database path: LOCALAPPDATA is not set and " +
-          "VENDING_DB_PATH was not provided. Set one of them."
-      )
-    }
-    dbPath = path.join(localAppData, "vending-outreach", "app.db")
-  }
-
-  if (dbPath.toLowerCase().includes("onedrive")) {
-    throw new Error(
-      `Refusing to open the database at "${dbPath}" because the resolved ` +
-        'path contains "OneDrive". OneDrive syncs app.db, app.db-wal, and ' +
-        "app.db-shm as three independently-versioned files; a sync racing a " +
-        "live write corrupts SQLite. Point VENDING_DB_PATH somewhere outside " +
-        "any synced folder (the default is " +
-        "%LOCALAPPDATA%\\vending-outreach\\app.db, which is safe as long as " +
-        "LOCALAPPDATA itself isn't redirected into OneDrive)."
-    )
-  }
+  const dbPath = override
+    ? path.resolve(override)
+    : path.join(dataDir(), "app.db")
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  warnIfSynced(dbPath)
   return dbPath
 }
 

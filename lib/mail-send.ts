@@ -60,6 +60,7 @@ import {
   type MailboxRow,
   type MessageRow,
 } from "./db.ts"
+import { projectPath } from "./paths.ts"
 import {
   isUsFederalHoliday,
   isWithinSendWindow,
@@ -280,7 +281,7 @@ export function setSendEnabled(enabled: boolean): void {
 }
 
 function stopFilePath(): string {
-  return process.env.VENDING_STOP_FILE?.trim() || path.resolve("STOP")
+  return process.env.VENDING_STOP_FILE?.trim() || projectPath("STOP")
 }
 
 /**
@@ -557,7 +558,7 @@ export const DEFAULT_DRYRUN_DIR = "outbox-dryrun"
 
 function dryRunDir(): string {
   return (
-    process.env.OUTBOX_DRYRUN_DIR?.trim() || path.resolve(DEFAULT_DRYRUN_DIR)
+    process.env.OUTBOX_DRYRUN_DIR?.trim() || projectPath(DEFAULT_DRYRUN_DIR)
   )
 }
 
