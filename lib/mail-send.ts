@@ -325,17 +325,25 @@ export interface TransportSendResult {
   /**
    * The Message-ID nodemailer put on the wire.
    *
-   * ### BLOCKED ITEM — DO NOT TRUST THIS VALUE (spec §5, "Threading")
+   * ### DO NOT TRUST THIS VALUE (spec §5, "Threading")
    * Gmail may rewrite `Message-ID` on SMTP submission. If it does, a follow-up
    * that sets `In-Reply-To` to this value points at an ID that never existed:
    * threading breaks and bounce attribution fails, both silently, with no
-   * error raised anywhere. We have no Gmail credentials yet, so this is
-   * untested and must be verified empirically before follow-up logic ships.
+   * error raised anywhere.
    *
-   * Therefore: the Message-ID read back from `[Gmail]/Sent Mail` is the ONLY
-   * authoritative one (see `reconcile`), and correlation is always on our own
-   * `X-Outreach-Id`. This field is stored for diagnostics and is overwritten
-   * by whatever reconciliation finds.
+   * Therefore the Message-ID read back from `[Gmail]/Sent Mail` is the ONLY
+   * authoritative one, and correlation is always on our own `X-Outreach-Id` —
+   * correlating on the Message-ID would mean trusting the thing in question.
+   * This field is stored so a rewrite can be detected, and is overwritten by
+   * whatever the Sent Mail copy turns out to say.
+   *
+   * Resolved by `confirmSentMessageIds`, which the worker runs on a timer: it
+   * replaces every unconfirmed value with what Gmail actually stored, well
+   * before the day-4 follow-up consumes it. The design does not depend on
+   * knowing whether Gmail rewrites — if it preserved the ID the update is a
+   * no-op, and if it rewrote it, threading is repaired. Real rewrites are
+   * logged as `send.message_id_rewritten`, so the answer comes from live
+   * traffic rather than from an assumption in either direction.
    */
   readonly generatedMessageId: string | null
   readonly response: string
@@ -1669,6 +1677,20 @@ export interface SentMailHit {
 /** Injectable so tests never open a socket. */
 export interface SentMailSearcher {
   find(mailbox: MailboxRow, outreachId: string): Promise<SentMailHit | null>
+  /**
+   * Confirms many sends over one connection.
+   *
+   * `find` opens a connection per call. That is acceptable for the occasional
+   * reconciliation, but a confirmation sweep over a day's sends would be one
+   * login per message, which is how an account earns
+   * `454 4.7.0 Too many login attempts`. Optional so a test can supply only
+   * `find`; `confirmSentMessageIds` falls back to sequential `find` calls and
+   * caps the batch when it is absent.
+   */
+  findMany?(
+    mailbox: MailboxRow,
+    outreachIds: readonly string[]
+  ): Promise<Map<string, SentMailHit>>
   close?(): Promise<void>
 }
 
@@ -2673,4 +2695,139 @@ export function clearDryRunMessages(): number {
   const n = Number(result.changes)
   if (n > 0) logEvent("send.dryrun_cleared", { detail: { deleted: n } })
   return n
+}
+
+// ---------------------------------------------------------------------------
+// Message-ID confirmation
+// ---------------------------------------------------------------------------
+
+/**
+ * Replaces locally-generated Message-IDs with the ones Gmail actually stored.
+ *
+ * WHY THIS EXISTS. Nodemailer generates a Message-ID and reports it back, but
+ * a submission server is free to replace it, and Gmail is widely reported to
+ * do so. If it does, a day-4 follow-up whose `In-Reply-To` carries our
+ * generated value points at an ID that never existed: the follow-up does not
+ * thread, and a bounce DSN quoting the real ID cannot be matched to the lead.
+ * Both fail silently — no error is raised anywhere, which is what makes this
+ * worth code rather than a comment.
+ *
+ * The design does not depend on knowing the answer. Whatever Gmail did, the
+ * copy in Sent Mail is the truth, so we read it back and store that. If Gmail
+ * preserved our ID the update is a no-op; if it rewrote it, threading is
+ * repaired before the follow-up is composed.
+ *
+ * `gm_thrid` is the "confirmed" marker. It can only ever be written from a
+ * Sent Mail read, so `gm_thrid IS NULL` on a sent row means "still carrying
+ * whatever nodemailer said" — no extra column needed.
+ *
+ * Correlation is on our own `X-Outreach-Id`, never on the Message-ID, for the
+ * obvious reason that the Message-ID is the thing in question.
+ */
+export interface ConfirmMessageIdsResult {
+  /** Rows that were still unconfirmed when the pass started. */
+  checked: number
+  /** Rows now carrying an authoritative Message-ID. */
+  confirmed: number
+  /** Of those, how many Gmail had actually rewritten. */
+  rewritten: number
+  /** Found in Sent Mail but with no usable Message-ID header. */
+  incomplete: number
+}
+
+export interface ConfirmMessageIdsDeps {
+  searcher: SentMailSearcher
+  now?: () => number
+  /** How far back to look. Must exceed the searcher's own scan window. */
+  windowMs?: number
+  /** Cap per pass, so a backlog cannot monopolise a tick. */
+  limit?: number
+  logEvent?: typeof logEvent
+}
+
+export async function confirmSentMessageIds(
+  mailbox: MailboxRow,
+  deps: ConfirmMessageIdsDeps
+): Promise<ConfirmMessageIdsResult> {
+  const now = deps.now ?? Date.now
+  const emit = deps.logEvent ?? logEvent
+  // Two days: comfortably inside the searcher's default three-day scan, and
+  // far short of the day-4 follow-up that consumes the result.
+  const windowMs = deps.windowMs ?? 2 * 24 * 60 * 60 * 1000
+  const limit = deps.limit ?? 50
+
+  const rows = getDb()
+    .prepare(
+      `SELECT id, lead_id, outreach_id, message_id
+         FROM messages
+        WHERE mailbox_id = ?
+          AND direction = 'out'
+          AND status = 'sent'
+          AND dry_run = 0
+          AND gm_thrid IS NULL
+          AND outreach_id IS NOT NULL
+          AND sent_at >= ?
+        ORDER BY sent_at ASC
+        LIMIT ?`
+    )
+    .all(mailbox.id, now() - windowMs, limit) as unknown as {
+    id: string
+    lead_id: string
+    outreach_id: string
+    message_id: string | null
+  }[]
+
+  const result: ConfirmMessageIdsResult = {
+    checked: rows.length,
+    confirmed: 0,
+    rewritten: 0,
+    incomplete: 0,
+  }
+  if (rows.length === 0) return result
+
+  const ids = rows.map((r) => r.outreach_id)
+  let hits: Map<string, SentMailHit>
+  if (deps.searcher.findMany) {
+    hits = await deps.searcher.findMany(mailbox, ids)
+  } else {
+    // No batch support (a test double, usually). One connection per message is
+    // exactly what this function exists to avoid, so keep it to a few.
+    hits = new Map()
+    for (const id of ids.slice(0, 5)) {
+      const hit = await deps.searcher.find(mailbox, id)
+      if (hit) hits.set(id, hit)
+    }
+  }
+
+  const update = getDb().prepare(
+    `UPDATE messages
+        SET message_id = COALESCE(?, message_id), gm_thrid = ?
+      WHERE id = ?`
+  )
+  for (const row of rows) {
+    const hit = hits.get(row.outreach_id)
+    if (!hit) continue
+    if (hit.messageId === null) {
+      // In Sent Mail but no Message-ID header we can read. Leaving `gm_thrid`
+      // unset keeps it in the queue rather than marking a non-answer as final.
+      result.incomplete++
+      continue
+    }
+    const rewritten =
+      row.message_id !== null && row.message_id !== hit.messageId
+    update.run(hit.messageId, hit.gmThrid, row.id)
+    result.confirmed++
+    if (rewritten) {
+      result.rewritten++
+      emit("send.message_id_rewritten", {
+        leadId: row.lead_id,
+        detail: {
+          outreachId: row.outreach_id,
+          submitted: row.message_id,
+          stored: hit.messageId,
+        },
+      })
+    }
+  }
+  return result
 }

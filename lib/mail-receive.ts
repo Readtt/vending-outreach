@@ -1027,6 +1027,77 @@ export function createImapSentMailSearcher(
   const maxMessages = options.fallbackMaxMessages ?? 500
 
   return {
+    /**
+     * Confirms many sends over ONE connection.
+     *
+     * `find` opens a connection per call, which is fine for the occasional
+     * reconciliation but not for a confirmation sweep: one login per message
+     * is how an account earns `454 4.7.0 Too many login attempts`. This does a
+     * single recent-Sent scan and matches every requested id out of it.
+     */
+    async findMany(
+      mailbox: MailboxRow,
+      outreachIds: readonly string[]
+    ): Promise<Map<string, SentMailHit>> {
+      const found = new Map<string, SentMailHit>()
+      const wanted = new Set(outreachIds)
+      if (wanted.size === 0) return found
+
+      const client = new ImapFlow(imapOptions(mailbox))
+      await client.connect()
+      try {
+        const sentPath = await resolveSpecialFolder(
+          client,
+          "\Sent",
+          "[Gmail]/Sent Mail"
+        )
+        const lock = await client.getMailboxLock(sentPath, { readOnly: true })
+        try {
+          const since = new Date(Date.now() - windowMs)
+          const recent = await client.search({ since }, { uid: true })
+          const list = (Array.isArray(recent) ? recent : []).slice(-maxMessages)
+          if (list.length === 0) return found
+
+          // One FETCH for the whole range rather than one per uid — the
+          // difference between a handful of round trips and several hundred.
+          for await (const message of client.fetch(
+            list.join(","),
+            {
+              uid: true,
+              envelope: true,
+              internalDate: true,
+              threadId: true,
+              headers: ["x-outreach-id", "message-id"],
+            },
+            { uid: true }
+          )) {
+            const id = headerValueFrom(message.headers, "x-outreach-id")
+            if (id === null || !wanted.has(id) || found.has(id)) continue
+            found.set(id, {
+              outreachId: id,
+              // AUTHORITATIVE: what Gmail actually stored, which is not
+              // necessarily what we handed it.
+              messageId:
+                headerValueFrom(message.headers, "message-id") ??
+                message.envelope?.messageId ??
+                null,
+              gmThrid: message.threadId ?? null,
+              uid: message.uid,
+              internalDate: message.internalDate
+                ? new Date(message.internalDate).getTime()
+                : null,
+            })
+            if (found.size === wanted.size) break
+          }
+          return found
+        } finally {
+          lock.release()
+        }
+      } finally {
+        await client.logout().catch(() => client.close())
+      }
+    },
+
     async find(
       mailbox: MailboxRow,
       outreachId: string

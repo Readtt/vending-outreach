@@ -25,6 +25,7 @@ import {
   type MailboxRow,
 } from "../lib/db.ts"
 import {
+  confirmSentMessageIds,
   reconcilePendingSends,
   tripCircuitBreaker,
   type SentMailSearcher,
@@ -47,6 +48,15 @@ export const TICK_INTERVAL_MS = 60 * 1000
  * of times across that window rather than spinning.
  */
 export const LOCK_RETRY_MS = 15 * 1000
+
+/**
+ * How often to reconcile locally-generated Message-IDs against Sent Mail.
+ *
+ * Five minutes is far more often than needed — the value is consumed by the
+ * day-4 follow-up — but the pass is a single IMAP scan that does nothing at
+ * all when there is nothing unconfirmed, so there is no reason to be stingy.
+ */
+export const CONFIRM_INTERVAL_MS = 5 * 60 * 1000
 
 function stamp(): string {
   return new Date().toISOString().slice(11, 19)
@@ -115,6 +125,9 @@ export interface WorkerDeps {
   lockRetryMs?: number
   /** Injectable so a test does not spend real seconds waiting. */
   sleep?: (ms: number) => Promise<void>
+  /** False in tests: no IMAP, so no Message-ID confirmation pass. */
+  confirmMessageIds?: boolean
+  confirmSentMessageIds?: typeof confirmSentMessageIds
 }
 
 export interface WorkerHandle {
@@ -212,6 +225,55 @@ export async function startWorker(
     // depended on unref in the first place.
   }
 
+  // --- Message-ID confirmation --------------------------------------------
+  //
+  // Nodemailer reports the Message-ID it generated, but a submission server
+  // may replace it, and Gmail is widely reported to. If it does, the day-4
+  // follow-up threads on an ID that never existed and bounce attribution
+  // fails — both silently. So the copy in Sent Mail is read back and treated
+  // as the truth, whichever way Gmail behaves.
+  //
+  // Its own connection, reused across passes: `find()` opens one per call, and
+  // a login per message is how an account earns `454 Too many login attempts`.
+  let confirmSearcher: SentMailSearcher | null = null
+  let lastConfirmAt = 0
+
+  const runConfirmationPass = async (): Promise<void> => {
+    if (deps.confirmMessageIds === false) return
+    const nowMs = Date.now()
+    if (nowMs - lastConfirmAt < CONFIRM_INTERVAL_MS) return
+    lastConfirmAt = nowMs
+
+    const mailboxes = (deps.listMailboxes ?? listMailboxes)().filter(
+      (m) => m.status !== "disabled"
+    )
+    if (mailboxes.length === 0) return
+
+    const confirm = deps.confirmSentMessageIds ?? confirmSentMessageIds
+    try {
+      confirmSearcher ??= (deps.createSearcher ?? createImapSentMailSearcher)()
+    } catch (err) {
+      log(`message-id confirmation unavailable: ${messageOf(err)}`)
+      return
+    }
+
+    for (const mailbox of mailboxes) {
+      try {
+        const r = await confirm(mailbox, { searcher: confirmSearcher })
+        if (r.confirmed > 0 || r.incomplete > 0) {
+          log(
+            `message-ids for ${mailbox.email}: ${r.confirmed}/${r.checked} confirmed` +
+              (r.rewritten > 0 ? `, ${r.rewritten} rewritten by Gmail` : "") +
+              (r.incomplete > 0 ? `, ${r.incomplete} still unreadable` : "")
+          )
+        }
+      } catch (err) {
+        // Threading is worth repairing, never worth stopping the loop for.
+        log(`message-id confirmation for ${mailbox.email}: ${messageOf(err)}`)
+      }
+    }
+  }
+
   const runTickGuarded = async (): Promise<void> => {
     // The re-entrancy flag. `tick()` has its own guard at module scope, which
     // is the authoritative one; this avoids even queueing an overlapping call.
@@ -240,6 +302,7 @@ export async function startWorker(
     } finally {
       if (inflight === promise) inflight = null
     }
+    await runConfirmationPass()
     schedule()
   }
 
@@ -286,6 +349,11 @@ export async function startWorker(
       if (watcher) await watcher.stop()
     } catch (err) {
       log(`watcher shutdown: ${messageOf(err)}`)
+    }
+    try {
+      await confirmSearcher?.close?.()
+    } catch {
+      /* closing a diagnostic connection must never stall a shutdown */
     }
     if (inflight !== null) {
       // Let an in-flight tick finish rather than killing it mid-send: a
