@@ -1257,3 +1257,211 @@ export function updateLead(id: string, patch: LeadPatch): LeadRow {
   }
   return row
 }
+
+// ---------------------------------------------------------------------------
+// Read models for the UI
+// ---------------------------------------------------------------------------
+//
+// Everything below is read-only and shaped for a screen. Kept here rather than
+// in the pages so that a Server Component never builds SQL, and so the worker
+// and the UI agree on what "a reply" or "due for a call" means.
+
+/** Every message on a lead's thread, oldest first. */
+export function listMessagesForLead(leadId: string): MessageRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM messages WHERE lead_id = ?
+       ORDER BY COALESCE(sent_at, created_at) ASC, id ASC`
+    )
+    .all(leadId) as unknown as MessageRow[]
+}
+
+/** Most recent activity first. `types` filters to a subset when given. */
+export function listRecentEvents(
+  limit = 50,
+  options: { leadId?: string; types?: readonly string[] } = {}
+): EventRow[] {
+  const where: string[] = []
+  const params: (string | number)[] = []
+  if (options.leadId) {
+    where.push("lead_id = ?")
+    params.push(options.leadId)
+  }
+  if (options.types?.length) {
+    where.push(`type IN (${options.types.map(() => "?").join(", ")})`)
+    params.push(...options.types)
+  }
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : ""
+  params.push(limit)
+  return getDb()
+    .prepare(
+      `SELECT * FROM events ${clause} ORDER BY created_at DESC, id DESC LIMIT ?`
+    )
+    .all(...params) as unknown as EventRow[]
+}
+
+export interface InboxThread {
+  lead: LeadRow
+  latestInbound: MessageRow | null
+  messageCount: number
+}
+
+/**
+ * The human queue: leads triage or classification escalated.
+ *
+ * Only `hot` reaches here. Everything the bot can dispose of on its own —
+ * a refusal, an existing vendor, an out-of-office — never lands in this list,
+ * which is the whole point of the narrow auto-reply action set (spec §3).
+ */
+export function listInboxThreads(limit = 100): InboxThread[] {
+  const leads = getDb()
+    .prepare(
+      `SELECT * FROM leads WHERE status = 'hot'
+       ORDER BY COALESCE(created_at, 0) DESC LIMIT ?`
+    )
+    .all(limit) as unknown as LeadRow[]
+
+  return leads.map((lead) => {
+    const latestInbound = getDb()
+      .prepare(
+        `SELECT * FROM messages WHERE lead_id = ? AND direction = 'in'
+         ORDER BY COALESCE(sent_at, created_at) DESC LIMIT 1`
+      )
+      .get(lead.id) as unknown as MessageRow | undefined
+    const messageCount = Number(
+      (
+        getDb()
+          .prepare(`SELECT count(*) AS n FROM messages WHERE lead_id = ?`)
+          .get(lead.id) as { n: number }
+      ).n
+    )
+    return { lead, latestInbound: latestInbound ?? null, messageCount }
+  })
+}
+
+export interface CallListEntry {
+  lead: LeadRow
+  firstContactedAt: number
+  hoursSinceContact: number
+}
+
+/**
+ * Leads worth phoning: contacted, still silent, and reachable by phone.
+ *
+ * The window is 18–96 hours rather than literally "yesterday". This app only
+ * runs while the user has it open, so a strict calendar-day rule would silently
+ * drop every lead contacted on a day the machine was asleep. Operators describe
+ * the play as "call the day after you make contact"; a few days of slack
+ * preserves that without losing anyone.
+ */
+export function listCallList(
+  now: number = Date.now(),
+  options: { minHours?: number; maxHours?: number } = {}
+): CallListEntry[] {
+  const minHours = options.minHours ?? 18
+  const maxHours = options.maxHours ?? 96
+  const rows = getDb()
+    .prepare(
+      `SELECT l.*, MIN(m.sent_at) AS first_sent
+         FROM leads l
+         JOIN messages m
+           ON m.lead_id = l.id AND m.direction = 'out' AND m.status = 'sent'
+        WHERE l.phone IS NOT NULL AND trim(l.phone) <> ''
+          AND l.status IN ('contacted', 'replied')
+          AND NOT EXISTS (
+            SELECT 1 FROM messages i
+             WHERE i.lead_id = l.id AND i.direction = 'in'
+          )
+        GROUP BY l.id
+       HAVING first_sent IS NOT NULL
+          AND first_sent <= ? AND first_sent >= ?
+        ORDER BY first_sent ASC`
+    )
+    .all(now - minHours * 3600_000, now - maxHours * 3600_000) as unknown as (LeadRow & {
+    first_sent: number
+  })[]
+
+  return rows.map((row) => {
+    const { first_sent, ...lead } = row
+    return {
+      lead: lead as LeadRow,
+      firstContactedAt: first_sent,
+      hoursSinceContact: Math.floor((now - first_sent) / 3600_000),
+    }
+  })
+}
+
+export interface DashboardStats {
+  sentToday: number
+  dryRunToday: number
+  repliesLast7d: number
+  hotLeads: number
+  readyToSend: number
+  hardBounceRateLast50: number | null
+  byStatus: Record<LeadStatus, number>
+  totalLeads: number
+}
+
+/** One query pass for the dashboard tiles. `dayStart` is operator-local midnight. */
+export function dashboardStats(
+  dayStart: number,
+  now: number = Date.now()
+): DashboardStats {
+  const db = getDb()
+  const scalar = (sql: string, ...params: (string | number)[]): number =>
+    Number((db.prepare(sql).get(...params) as { n: number } | undefined)?.n ?? 0)
+
+  const sentToday = scalar(
+    `SELECT count(*) AS n FROM messages
+      WHERE direction = 'out' AND status = 'sent'
+        AND dry_run = 0 AND sent_at >= ?`,
+    dayStart
+  )
+  const dryRunToday = scalar(
+    `SELECT count(*) AS n FROM messages
+      WHERE direction = 'out' AND status = 'sent'
+        AND dry_run = 1 AND sent_at >= ?`,
+    dayStart
+  )
+  const repliesLast7d = scalar(
+    `SELECT count(*) AS n FROM messages
+      WHERE direction = 'in' AND COALESCE(sent_at, created_at) >= ?`,
+    now - 7 * 24 * 3600_000
+  )
+
+  // Bounce rate over the last 50 real sends — the number that decides whether
+  // the sending account survives.
+  //
+  // Counted off `messages.error`, where `markBounce` writes `{"bounce":"hard"}`
+  // against the specific send that bounced. The `events` table also records
+  // `inbound.bounce`, but only per lead and per moment, so it cannot be scoped
+  // to "the last 50 sends" without a time-window guess. Null until there is
+  // enough history to mean anything, so the UI can say "not enough data"
+  // rather than a reassuring 0%.
+  const recent = db
+    .prepare(
+      `SELECT error FROM messages
+        WHERE direction = 'out' AND status = 'sent' AND dry_run = 0
+        ORDER BY sent_at DESC LIMIT 50`
+    )
+    .all() as unknown as { error: string | null }[]
+  let hardBounceRateLast50: number | null = null
+  if (recent.length >= 10) {
+    const bounced = recent.filter((r) =>
+      (r.error ?? "").includes('"bounce":"hard"')
+    ).length
+    hardBounceRateLast50 = bounced / recent.length
+  }
+
+  const byStatus = countLeadsByStatus()
+  return {
+    sentToday,
+    dryRunToday,
+    repliesLast7d,
+    hotLeads: byStatus.hot ?? 0,
+    readyToSend: byStatus.ready ?? 0,
+    hardBounceRateLast50,
+    byStatus,
+    totalLeads: Object.values(byStatus).reduce((a, b) => a + b, 0),
+  }
+}
