@@ -4,6 +4,11 @@ Finds local businesses that could take a vending machine, writes each one a
 real email about their own business, sends it from your Gmail at a safe pace,
 handles the boring replies for you, and passes you the people worth talking to.
 
+Works in the United States and Canada. The two are not the same job — Canada's
+rules want consent, a second contact detail on every email, and its own list of
+public holidays — so the app tracks which country each business is in and
+changes what it does accordingly.
+
 Everything runs on your own computer. There is no account to make, no server to
 rent, and nothing to pay for except whatever AI service you point it at.
 
@@ -51,28 +56,34 @@ Then press **Test**. It checks sending and receiving separately, because an
 account can send fine while receiving is switched off, and in that state every
 reply disappears without a trace.
 
-**3. Settings, "About you" tab.** Fill it all in, especially the address. US law
-requires a real postal address on every sales email, so nothing gets written at
-all until that box has something in it. A PO box is fine.
+**3. Settings, "About you" tab.** Fill it all in, especially the address. Both
+countries require a real postal address on every sales email, so nothing gets
+written at all until that box has something in it. A PO box is fine. Add your
+phone or your website too if you are emailing Canada, which asks for one of
+them next to the address.
 
-**4. Leads, "Find businesses".** Type a town or ZIP code, pick how far to look
-and what kinds of business you want. It searches OpenStreetMap, which is free
-and needs no key. Add the ones you like.
+**4. Settings, "Who to find" tab.** Pick your countries, your usual town, and
+the kinds of business you want. This is where searches start from.
 
-**5. Wait a few minutes.** The engine checks for work every 60 seconds. It reads
+**5. Leads, "Find businesses".** It opens on what you saved in step 4; change
+anything you like for this one search. Type a town, a ZIP code, or a postal
+code. It searches OpenStreetMap, which is free and needs no key. Add the ones
+you like.
+
+**6. Wait a few minutes.** The engine checks for work every 60 seconds. It reads
 each business's website, writes them an email, and lines it up. Watch the
 Dashboard. "Ready to send" going up means it is working.
 
-**6. Read what it wrote.** Open a few files in `outbox-dryrun/`. Every email
+**7. Read what it wrote.** Open a few files in `outbox-dryrun/`. Every email
 should obviously be about _that business_. If they read like a form letter, fix
 the wording in `lib/prompts.ts` before a single real one goes out.
 
-**7. Approve the first batch.** The first 20 emails are held back on purpose and
+**8. Approve the first batch.** The first 20 emails are held back on purpose and
 the Leads page shows a bar about it. Read a few before you approve. This is the
 cheapest possible moment to catch a bad email, while 20 people have it instead
 of 500.
 
-**8. Now switch sending on,** from the Dashboard.
+**9. Now switch sending on,** from the Dashboard.
 
 ## Two things worth doing before real emails go out
 
@@ -100,9 +111,34 @@ AI-written text is ever sent to a stranger on its own. The only automatic reply
 is a fixed message you can read in `lib/prompts.ts`.
 
 **Calls** lists everyone you emailed a day or two ago who has not replied and
-has a phone number, with a script you can ask it to write. People who do this
-for a living say the phone call is what actually closes the deal, so it is not a
-side feature.
+has a phone number, with a script you can ask it to write. Each email in the
+sequence opens its own window, so a business you never got round to phoning
+comes back after the next follow-up. People who do this for a living say the
+phone call is what actually closes the deal, so it is not a side feature.
+
+## Emailing Canada
+
+Tick Canada under Settings, "Who to find". Four things change, and you do not
+have to do anything about any of them:
+
+- **The address has to come from the business's own website.** Canada's CASL
+  allows cold email to an address a business published itself and did not
+  attach a "no unsolicited mail" notice to. An entry someone typed into
+  OpenStreetMap is not that, so for a Canadian business that entry is ignored
+  and the lead is skipped if nothing else turns up.
+- **The email carries a second way to reach you** — your phone number or your
+  website — next to your postal address. Nothing is written for a Canadian
+  business until one of them is filled in, and Settings says so up front.
+- **Holidays follow the right calendar.** Nothing goes out on Canada Day or
+  Victoria Day; the Fourth of July is a working day.
+- **Emails arrive in the recipient's morning.** A business in Vancouver is
+  written to at 9am Pacific whether you are in Toronto or in Texas.
+
+Searches stay inside whichever countries you tick. A handful of border towns
+are unreachable as a result — Windsor, Sarnia, Niagara Falls, Sault Ste. Marie,
+Fort Frances and Edmundston all sit across a river from an American city at the
+same latitude, and the app would rather miss them than email one country's
+businesses under the other country's rules. `lib/geo.ts` lists them.
 
 ## When something looks wrong
 
@@ -115,6 +151,7 @@ side feature.
 | Everything stopped and nothing explains it | There is a file called `STOP` in the project folder. Delete it.                                                                                                  |
 | No emails going out                        | Sending is off (that is the default), the first 20 still need approving on the Leads page, it is outside 9am to 4pm on a weekday, or you have hit today's limit. |
 | "Sent today 5 / 5" and it stopped          | The slow start. New accounts begin at 5 a day and climb on days you actually send. The tile says what it is climbing toward.                                     |
+| Canadian businesses keep getting skipped   | Either they publish no address on their own site, or your phone and website are both blank under Settings, "About you". Canada needs one of them.                |
 
 Your data lives in `data/app.db`, inside this folder. Everything the app writes
 stays here — the database, the dry-run outbox, the STOP file — so the whole
@@ -132,7 +169,8 @@ unsynced.
 pnpm dev         # website and engine, which is what you want
 pnpm dev:web     # website only
 pnpm worker      # engine only
-pnpm test        # 314 tests
+pnpm seed:demo   # fill an empty database with demo data, to look around first
+pnpm test        # 347 tests
 pnpm typecheck
 pnpm build
 ```
