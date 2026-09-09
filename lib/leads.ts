@@ -1379,7 +1379,16 @@ export interface FindLocationsResult {
   candidates: OsmCandidate[]
   /** Everything Overpass returned that mapped to a requested type. */
   totalFound: number
-  /** How many of `candidates` are not already in the leads table. */
+  /**
+   * How many distinct businesses that was.
+   *
+   * Lower than `totalFound` whenever OSM holds both a node and a way for the
+   * same place. That gap is not "businesses you already have" and must never
+   * be presented as one — it is the same business counted twice. Anything
+   * shown to a person counts businesses, so it counts this.
+   */
+  distinctFound: number
+  /** How many of `distinctFound` are not already in the leads table. */
   newCount: number
   /** Set when the requested box had to be pulled back to the selected countries. */
   clamped: boolean
@@ -1573,6 +1582,7 @@ export async function findLocations(
     bbox,
     candidates,
     totalFound: found.length,
+    distinctFound: deduped.length,
     newCount: candidates.length,
     clamped,
     ...(resolvedPlace !== undefined ? { resolvedPlace } : {}),

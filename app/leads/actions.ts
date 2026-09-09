@@ -68,7 +68,7 @@ export async function findLocationsAction(
   // list itself is what keeps `importLeadsAction` under the 1 MB server action
   // body limit — see migration 5 in `lib/db.ts`.
   return {
-    totalFound: result.totalFound,
+    distinctFound: result.distinctFound,
     newCount: result.newCount,
     clamped: result.clamped,
     ...(result.resolvedPlace !== undefined

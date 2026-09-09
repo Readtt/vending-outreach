@@ -45,7 +45,8 @@ export interface TargetingDefaults {
 }
 
 export interface FindLocationsFormResult {
-  totalFound: number
+  /** Distinct businesses. Not Overpass's element count — see `lib/leads.ts`. */
+  distinctFound: number
   newCount: number
   clamped: boolean
   resolvedPlace?: string
@@ -147,4 +148,4 @@ export function leadFit(score: number): LeadFit {
 export const LEAD_FIT_EXPLANATION =
   "Based on the kind of business, its opening hours, and how much we could find out about it."
 
-export { formatDateTime } from "@/lib/format"
+export { formatCount, formatDateTime } from "@/lib/format"

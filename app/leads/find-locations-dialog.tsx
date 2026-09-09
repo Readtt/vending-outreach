@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { COUNTRIES, COUNTRY_LABELS, type Country } from "@/lib/geo"
 import { findLocationsAction, importLeadsAction } from "./actions"
+import { formatCount } from "@/lib/format"
 import type {
   BusinessTypeOption,
   FindLocationsFormResult,
@@ -107,8 +108,10 @@ export function FindLocationsDialog({
         .then(({ inserted, skipped }) => {
           setState({ status: "imported", inserted, skipped })
           toast.success(
-            `Added ${inserted} business${inserted === 1 ? "" : "es"}. Research starts now.` +
-              (skipped > 0 ? ` ${skipped} were already on the list.` : "")
+            `Added ${formatCount(inserted)} business${inserted === 1 ? "" : "es"}. Research starts now.` +
+              (skipped > 0
+                ? ` ${formatCount(skipped)} were already on the list.`
+                : "")
           )
           router.refresh()
         })
@@ -219,19 +222,30 @@ export function FindLocationsDialog({
 
           {state.status === "results" && (
             <div className="rounded-lg border border-border px-3 py-2.5 text-sm">
+              {/* Counts businesses, and only mentions a shortfall when one
+                  actually exists. The old copy read the gap between Overpass's
+                  element count and this one as "businesses you already have",
+                  so a first-ever search on an empty Leads page announced sixty
+                  businesses the user had never seen. */}
               <p>
                 Found{" "}
                 <strong className="tabular-nums">
-                  {state.result.totalFound}
+                  {formatCount(state.result.distinctFound)}
                 </strong>
                 {state.result.resolvedPlace
                   ? ` near ${state.result.resolvedPlace}`
                   : ""}
-                . Of those,{" "}
-                <strong className="tabular-nums">
-                  {state.result.newCount}
-                </strong>{" "}
-                are new to you.
+                .
+                {state.result.newCount > 0 &&
+                  state.result.newCount < state.result.distinctFound && (
+                    <>
+                      {" "}
+                      <strong className="tabular-nums">
+                        {formatCount(state.result.newCount)}
+                      </strong>{" "}
+                      are new to you; the rest are already on your list.
+                    </>
+                  )}
               </p>
               {state.result.clamped && (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
@@ -249,10 +263,10 @@ export function FindLocationsDialog({
 
           {state.status === "imported" && (
             <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm">
-              Added {state.inserted} business
+              Added {formatCount(state.inserted)} business
               {state.inserted === 1 ? "" : "es"}. Research starts now.
               {state.skipped > 0
-                ? ` ${state.skipped} were already on the list.`
+                ? ` ${formatCount(state.skipped)} were already on the list.`
                 : ""}
             </div>
           )}
@@ -308,7 +322,7 @@ export function FindLocationsDialog({
             >
               {isPending
                 ? "Adding…"
-                : `Add ${state.result.newCount} business${state.result.newCount === 1 ? "" : "es"}`}
+                : `Add ${formatCount(state.result.newCount)} business${state.result.newCount === 1 ? "" : "es"}`}
             </Button>
           )}
         </DialogFooter>

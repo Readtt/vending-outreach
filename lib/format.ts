@@ -79,3 +79,15 @@ export function formatElapsed(hours: number): string {
   if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`
   return `${Math.round(hours / 24)} days`
 }
+
+/**
+ * 7373 → "7,373".
+ *
+ * The locale is pinned rather than left to the runtime: this is rendered on
+ * the server and again in the browser, and an unpinned `toLocaleString` puts
+ * a different separator in each under a non-US locale, which React reports as
+ * a hydration mismatch.
+ */
+export function formatCount(n: number): string {
+  return n.toLocaleString("en-US")
+}
