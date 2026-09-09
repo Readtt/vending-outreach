@@ -58,7 +58,12 @@ the default and it is deliberate.
    generic, the problem is the prompt in `lib/prompts.ts`, and it is worth
    fixing before a single real email goes out.
 
-7. **Only then, turn sending on** from the dashboard.
+7. **Approve the first batch.** The first 20 drafts are held on purpose — the
+   Leads page shows a banner. Nothing sends until you release them. Read a few
+   first; this is the cheapest moment to catch a bad template, before the rest
+   of your list gets the same email.
+
+8. **Only then, turn sending on** from the dashboard.
 
 ---
 
@@ -107,7 +112,8 @@ so this is not a side feature.
 | "Tasks gave up" on the dashboard | Something failed 5 times. The activity feed has the error. |
 | A red banner about the breaker | A safety limit tripped — bounce rate, or too many messages to one place. Read it before re-arming; it is a deliberate gate, not a glitch. |
 | Everything stopped, no explanation | A `STOP` file exists in the project root. Delete it. |
-| Emails aren't going out | Sending is off (default), you're outside the 9–4 weekday window, or the daily cap is reached. |
+| Emails aren't going out | Sending is off (default), the first 20 drafts still need approving on the Leads page, you're outside the 9–4 weekday window, or the day's cap is reached. |
+| "Sent today 5 / 5" and it stopped | The warm-up ramp. It starts at 5/day and climbs on days you actually send, protecting a new account. The tile says what it's climbing toward. |
 
 Your data lives in `%LOCALAPPDATA%\vending-outreach\app.db` — deliberately
 outside this folder, because OneDrive corrupts SQLite databases it syncs.
@@ -120,7 +126,7 @@ outside this folder, because OneDrive corrupts SQLite databases it syncs.
 pnpm dev         # UI + engine (what you want)
 pnpm dev:web     # UI only
 pnpm worker      # engine only
-pnpm test        # 283 tests
+pnpm test        # 290 tests
 pnpm typecheck
 pnpm build
 ```
