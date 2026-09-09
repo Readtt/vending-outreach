@@ -43,3 +43,15 @@ next-env.d.ts
 
 # subagent-driven-development scratch
 /.superpowers/
+
+# local agent/editor state
+/.claude/
+/.cursor/
+
+# exported conversation transcripts
+/*-local-command-caveat*.txt
+/20??-??-??-*.txt
+
+# scratch / saved pages
+/yt1.html
+/*.local.md
