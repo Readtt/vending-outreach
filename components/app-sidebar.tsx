@@ -17,11 +17,17 @@ function AppSidebar() {
   const pathname = usePathname()
 
   return (
-    <aside className="flex w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    // `sticky top-0` + a viewport height, rather than the page height the
+    // flex row would otherwise stretch this to. Without it the theme toggle
+    // sits at the bottom of the *content* — on Leads, five hundred rows down —
+    // so reaching it meant scrolling the whole table.
+    <aside className="sticky top-0 flex h-svh w-52 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="px-4 py-5">
         <span className="text-sm font-medium">Vending Outreach</span>
       </div>
-      <nav className="flex flex-col gap-0.5 px-2">
+      {/* Scrolls on its own in a short window, so a cramped viewport pushes
+          the links behind a scrollbar instead of pushing the toggle off. */}
+      <nav className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2">
         {NAV_LINKS.map((link) => {
           const isActive =
             link.href === "/"
