@@ -67,9 +67,10 @@ import {
 } from "./untrusted.ts"
 import {
   bboxAround,
-  clampToUs,
+  clampToCountries,
+  countryForPoint,
   geocodePlace,
-  isWithinUs,
+  isWithinCountries,
   OSM_SOURCE,
   searchOverpass,
   TARGET_TYPES,
@@ -78,6 +79,7 @@ import {
   type LeadType,
   type OsmCandidate,
 } from "./osm.ts"
+import { COUNTRY_LABELS, timezoneForPoint, type Country } from "./geo.ts"
 
 // ---------------------------------------------------------------------------
 // Deps
@@ -1360,23 +1362,25 @@ const READY_OR_BEYOND: readonly LeadStatus[] = [
 // ---------------------------------------------------------------------------
 
 export interface FindLocationsParams {
-  /** Free-text place ("Columbus, OH" / "43215"). Mutually exclusive with lat/lng. */
+  /** Free-text place ("Columbus, OH" / "London, ON" / "43215" / "K1A 0B1"). Mutually exclusive with lat/lng. */
   place?: string
   lat?: number
   lng?: number
   radiusMiles: number
   types: readonly LeadType[]
+  /** Which countries this search may reach into. Never empty. */
+  countries: readonly Country[]
 }
 
 export interface FindLocationsResult {
   bbox: BBox
-  /** Sanitized, US-clamped, and deduped against leads already in the DB. */
+  /** Sanitized, clamped to the selected countries, and deduped against leads already in the DB. */
   candidates: OsmCandidate[]
   /** Everything Overpass returned that mapped to a requested type. */
   totalFound: number
   /** How many of `candidates` are not already in the leads table. */
   newCount: number
-  /** Set when the requested box had to be pulled back to US bounds. */
+  /** Set when the requested box had to be pulled back to the selected countries. */
   clamped: boolean
   /** Present when `place` was geocoded. */
   resolvedPlace?: string
@@ -1431,9 +1435,12 @@ function dedupeWithinBatch(
 /**
  * Finds candidate businesses for a place or a coordinate.
  *
- * The bbox is clamped to US bounds before any query is issued (spec §0.5): a
- * search that reaches into Canada is not a search we may run, and clamping at
- * the source means no downstream step has to re-check.
+ * The bbox is clamped to the selected countries before any query is issued: a
+ * search that reaches somewhere the user did not pick is not a search we may
+ * run, and clamping at the source means no downstream step has to re-check.
+ * Reaching into a third country is the case that actually matters — an email
+ * into the EU or the UK lands under GDPR and PECR, which this app has no
+ * story for at all.
  */
 export async function findLocations(
   params: FindLocationsParams,
@@ -1458,6 +1465,11 @@ export async function findLocations(
       "findLocations: `types` is empty, so there is nothing to search for"
     )
   }
+  if (params.countries.length === 0) {
+    throw new Error(
+      "findLocations: `countries` is empty, so there is nowhere to search"
+    )
+  }
 
   let lat: number
   let lng: number
@@ -1465,11 +1477,14 @@ export async function findLocations(
 
   if (hasPlace) {
     const place = params.place as string
-    const geocoded = await geocodePlace(place, osmDeps)
+    const geocoded = await geocodePlace(place, params.countries, osmDeps)
     if (!geocoded) {
+      const where = params.countries
+        .map((c) => COUNTRY_LABELS[c])
+        .join(" or the ")
       throw new Error(
-        `findLocations: "${place}" did not match any US place. ` +
-          "Try a city and state, or a ZIP code."
+        `findLocations: "${place}" did not match anywhere in the ${where}. ` +
+          "Try a town and its state or province, a ZIP code, or a postal code."
       )
     }
     lat = geocoded.lat
@@ -1481,10 +1496,17 @@ export async function findLocations(
   }
 
   const requested = bboxAround(lat, lng, params.radiusMiles)
-  const clamped = !isWithinUs(requested)
-  const bbox = clamped ? clampToUs(requested) : requested
+  const clamped = !isWithinCountries(requested, params.countries)
+  const bbox = clamped
+    ? clampToCountries(requested, params.countries)
+    : requested
 
-  const found = await searchOverpass(bbox, params.types, osmDeps)
+  const found = await searchOverpass(
+    bbox,
+    params.types,
+    params.countries,
+    osmDeps
+  )
   const deduped = dedupeWithinBatch(found)
   const existing = existingOsmIds(deduped.map((c) => c.osmId))
   const candidates = deduped.filter((c) => !existing.has(c.osmId))
@@ -1495,6 +1517,7 @@ export async function findLocations(
       clamped,
       radiusMiles: params.radiusMiles,
       types: [...params.types],
+      countries: [...params.countries],
       totalFound: found.length,
       afterDedupe: deduped.length,
       newCount: candidates.length,
@@ -1527,6 +1550,8 @@ export interface OsmResearch {
   osmId: string
   name: string
   type: LeadType
+  /** Undefined where nothing on the OSM element could place it. */
+  country?: Country
   address: string | null
   phone: string | null
   website: string | null
@@ -1571,6 +1596,16 @@ export function importCandidates(
         continue
       }
 
+      // Both of these are decided once, here, rather than at send time.
+      // The country picks the compliance regime and the holiday calendar;
+      // the timezone is what makes "9am to 4pm" mean the recipient's morning
+      // rather than the operator's. Leaving `timezone` null — which is what
+      // this did before — quietly emailed a business in Vancouver at 6am
+      // because the person running the app was in Toronto.
+      const country =
+        candidate.country ?? countryForPoint(candidate.lat, candidate.lng)
+      const timezone = timezoneForPoint(candidate.lat, candidate.lng, country)
+
       const row = insertLead({
         name: candidate.name,
         type: candidate.type,
@@ -1579,6 +1614,8 @@ export function importCandidates(
         website: candidate.website,
         lat: candidate.lat,
         lng: candidate.lng,
+        timezone,
+        country: country ?? null,
         source: OSM_SOURCE,
         osmId: candidate.osmId,
       })
@@ -1587,6 +1624,7 @@ export function importCandidates(
         osmId: candidate.osmId,
         name: candidate.name,
         type: candidate.type,
+        ...(country !== undefined ? { country } : {}),
         address: candidate.address,
         phone: candidate.phone,
         website: candidate.website,
@@ -1812,6 +1850,14 @@ export async function enrichLead(
   }
 
   const osm = readOsmResearch(lead)
+
+  // Unknown resolves to Canada on purpose. The strips go quiet either side of
+  // the border, so "unknown" mostly means "a border town", and there the two
+  // regimes disagree: CAN-SPAM lets you email an address off a map, CASL does
+  // not. Treating an unplaced lead as Canadian costs a lead; treating it as
+  // American costs a violation.
+  const leadCountry: Country = lead.country ?? "CA"
+
   const research: ResearchRecord = {
     ...(osm !== undefined ? { osm } : {}),
     enrichedAt: resolved.now(),
@@ -1958,7 +2004,12 @@ export async function enrichLead(
       candidates.push(...extractMailtoEmails(page.html, page.url))
       candidates.push(...extractTextEmails(htmlToText(page.html), page.url))
     }
-    if (osm?.email) {
+    // CASL's implied consent (s.10(9)(b)) rests on the *recipient* having
+    // published the address. An OpenStreetMap tag is somebody else typing it
+    // into a map, which is not that, so for a Canadian business the OSM tag
+    // is not an address we are allowed to reach for. On the US side CAN-SPAM
+    // asks for no consent at all and the tag is fine.
+    if (osm?.email && leadCountry !== "CA") {
       candidates.push({
         email: normalizeEmail(osm.email),
         origin: "osm_tag",
@@ -1987,7 +2038,11 @@ export async function enrichLead(
     if (candidates.length === 0) {
       return finish(
         "no_email",
-        "no email address appeared on the site or in OSM"
+        leadCountry === "CA"
+          ? "no email address appeared anywhere on the site (a Canadian " +
+              "business has to have published it themselves — see CASL " +
+              "s.10(9)(b) — so the OpenStreetMap tag does not count)"
+          : "no email address appeared on the site or in OSM"
       )
     }
     if (accepted.length === 0) {

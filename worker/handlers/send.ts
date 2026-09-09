@@ -294,6 +294,7 @@ export async function handleSend(
     text: payload.body,
     sequenceStep: payload.step,
     leadTimezone: lead.timezone,
+    leadCountry: lead.country,
     // Handed down so the authoritative catch-up check in `canSendNow` sees the
     // same `run_after` the engine did.
     taskRunAfter: task.run_after,

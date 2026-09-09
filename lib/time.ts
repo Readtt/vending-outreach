@@ -1,6 +1,10 @@
 /**
  * Timezone-aware time helpers for the send scheduler.
  *
+ * The holiday tables are the one country-dependent part: a business in Ottawa
+ * is shut on Canada Day and open on the Fourth of July, and mail arriving on
+ * either is mail nobody reads.
+ *
  * Everything in this app is stored and compared as UTC epoch-milliseconds.
  * The only place "local time" exists is inside these functions, and it is
  * always derived via `Intl.DateTimeFormat(..., { timeZone }).formatToParts()`
@@ -9,6 +13,8 @@
  *
  * Pure, no dependencies.
  */
+
+import type { Country } from "./geo.ts"
 
 type PartMap = Partial<Record<Intl.DateTimeFormatPartTypes, string>>
 
@@ -57,11 +63,6 @@ function getLocalHour(timeZone: string, epochMs: number): number {
 /** 0 = Sunday ... 6 = Saturday. Pure calendar math — not timezone-dependent. */
 function calendarWeekday(date: CalendarDate): number {
   return new Date(Date.UTC(date.y, date.m - 1, date.d)).getUTCDay()
-}
-
-function addCalendarDays(date: CalendarDate, days: number): CalendarDate {
-  const dt = new Date(Date.UTC(date.y, date.m - 1, date.d + days))
-  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() }
 }
 
 /**
@@ -160,7 +161,7 @@ export function isWithinSendWindow(
 }
 
 // ---------------------------------------------------------------------------
-// US federal holidays (observed-date rules)
+// Public holidays (observed-date rules)
 // ---------------------------------------------------------------------------
 
 /** The nth (1-indexed) occurrence of `weekday` (0=Sun..6=Sat) in a month. */
@@ -202,6 +203,37 @@ function observedDate(year: number, month: number, day: number): CalendarDate {
   }
 }
 
+/** Adds days to a calendar date without going through a timezone. */
+function shiftDate(date: CalendarDate, days: number): CalendarDate {
+  const dt = new Date(Date.UTC(date.y, date.m - 1, date.d + days))
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() }
+}
+
+/**
+ * Easter Sunday, by the anonymous Gregorian algorithm.
+ *
+ * Needed only because Good Friday is a statutory holiday across Canada and is
+ * the one North American holiday that does not fall on a fixed date or an
+ * nth-weekday rule.
+ */
+function easterSunday(year: number): CalendarDate {
+  const a = year % 19
+  const b = Math.floor(year / 100)
+  const c = year % 100
+  const d = Math.floor(b / 4)
+  const e = b % 4
+  const f = Math.floor((b + 8) / 25)
+  const g = Math.floor((b - f + 1) / 3)
+  const h = (19 * a + b - d - g + 15) % 30
+  const i = Math.floor(c / 4)
+  const k = c % 4
+  const l = (32 + 2 * e + 2 * i - h - k) % 7
+  const m = Math.floor((a + 11 * h + 22 * l) / 451)
+  const month = Math.floor((h + l - 7 * m + 114) / 31)
+  const day = ((h + l - 7 * m + 114) % 31) + 1
+  return { y: year, m: month, d: day }
+}
+
 /** The 11 US federal holidays (5 U.S.C. § 6103), with observed-date shifts applied. */
 function usFederalHolidaysForYear(year: number): CalendarDate[] {
   return [
@@ -219,11 +251,54 @@ function usFederalHolidaysForYear(year: number): CalendarDate[] {
   ]
 }
 
-function isUsFederalHolidayDate(date: CalendarDate): boolean {
+/**
+ * Canadian holidays on which a small business is likely closed.
+ *
+ * Wider than the federal list on purpose. The question this answers is "is
+ * anyone there to read this", not "is this a paid day off under the Canada
+ * Labour Code", so Family Day and the August civic holiday are in even though
+ * neither is federal and neither is observed in every province. Sending on a
+ * day half the country is shut costs an email; skipping a day it turns out
+ * some provinces work costs a few hours of delay.
+ */
+function canadianHolidaysForYear(year: number): CalendarDate[] {
+  const easter = easterSunday(year)
+  return [
+    observedDate(year, 1, 1), // New Year's Day
+    nthWeekdayOfMonth(year, 2, 1, 3), // Family Day: 3rd Mon of Feb (ON/AB/SK/BC/NB)
+    shiftDate(easter, -2), // Good Friday
+    // Victoria Day: the Monday before May 25, so the last Monday on or
+    // before the 24th.
+    (() => {
+      const may24 = { y: year, m: 5, d: 24 }
+      const weekday = new Date(Date.UTC(year, 4, 24)).getUTCDay()
+      return shiftDate(may24, -((weekday + 6) % 7))
+    })(),
+    observedDate(year, 7, 1), // Canada Day
+    nthWeekdayOfMonth(year, 8, 1, 1), // Civic Holiday: 1st Mon of Aug
+    nthWeekdayOfMonth(year, 9, 1, 1), // Labour Day: 1st Mon of Sep
+    observedDate(year, 9, 30), // National Day for Truth and Reconciliation
+    nthWeekdayOfMonth(year, 10, 1, 2), // Thanksgiving: 2nd Mon of Oct
+    observedDate(year, 11, 11), // Remembrance Day
+    observedDate(year, 12, 25), // Christmas Day
+    observedDate(year, 12, 26), // Boxing Day
+  ]
+}
+
+function holidaysForYear(year: number, country: Country): CalendarDate[] {
+  return country === "CA"
+    ? canadianHolidaysForYear(year)
+    : usFederalHolidaysForYear(year)
+}
+
+function isHolidayDate(date: CalendarDate, country: Country): boolean {
+  // The neighbouring years are included because an observed date can shift
+  // across a year boundary — New Year's Day on a Saturday is observed on
+  // December 31st of the year before.
   const candidates = [
-    ...usFederalHolidaysForYear(date.y - 1),
-    ...usFederalHolidaysForYear(date.y),
-    ...usFederalHolidaysForYear(date.y + 1),
+    ...holidaysForYear(date.y - 1, country),
+    ...holidaysForYear(date.y, country),
+    ...holidaysForYear(date.y + 1, country),
   ]
   return candidates.some(
     (h) => h.y === date.y && h.m === date.m && h.d === date.d
@@ -231,30 +306,38 @@ function isUsFederalHolidayDate(date: CalendarDate): boolean {
 }
 
 /**
- * Whether the local calendar date of `epochMs` (in `timeZone`) is an
- * observed US federal holiday. Note this checks the *observed* date only —
- * e.g. when July 4th falls on a Saturday, the Friday before is flagged, not
- * the Saturday itself (which is already excluded by the weekend rule).
+ * Whether the local calendar date of `epochMs` (in `timeZone`) is a public
+ * holiday in `country`.
+ *
+ * Note this checks the *observed* date only — when July 4th falls on a
+ * Saturday, the Friday before is flagged, not the Saturday itself, which the
+ * weekend rule has already excluded.
  */
-export function isUsFederalHoliday(epochMs: number, timeZone: string): boolean {
-  return isUsFederalHolidayDate(getLocalCalendarDate(timeZone, epochMs))
+export function isPublicHoliday(
+  epochMs: number,
+  timeZone: string,
+  country: Country = "US"
+): boolean {
+  return isHolidayDate(getLocalCalendarDate(timeZone, epochMs), country)
 }
 
 // ---------------------------------------------------------------------------
 
 /**
  * The next epoch-ms instant at or after `epochMs` that falls inside the send
- * window, skipping weekends (if `weekdaysOnly`) and US federal holidays. If
- * `epochMs` is already inside a valid window, it is returned unchanged.
+ * window, skipping weekends (if `weekdaysOnly`) and `country`'s public
+ * holidays. If `epochMs` is already inside a valid window, it is returned
+ * unchanged.
  */
 export function nextSendWindowStart(
   epochMs: number,
   timeZone: string,
-  opts: SendWindowRules
+  opts: SendWindowRules,
+  country: Country = "US"
 ): number {
   if (
     isWithinSendWindow(epochMs, timeZone, opts) &&
-    !isUsFederalHoliday(epochMs, timeZone)
+    !isPublicHoliday(epochMs, timeZone, country)
   ) {
     return epochMs
   }
@@ -268,7 +351,7 @@ export function nextSendWindowStart(
     const weekday = calendarWeekday(date)
     const isWeekend = weekday === 0 || weekday === 6
     const disqualified =
-      (opts.weekdaysOnly && isWeekend) || isUsFederalHolidayDate(date)
+      (opts.weekdaysOnly && isWeekend) || isHolidayDate(date, country)
 
     if (!disqualified) {
       const windowStart = calendarDateAtHour(timeZone, date, opts.startHour)
@@ -277,7 +360,7 @@ export function nextSendWindowStart(
       }
     }
 
-    date = addCalendarDays(date, 1)
+    date = shiftDate(date, 1)
   }
 
   throw new Error(

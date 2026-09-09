@@ -60,9 +60,10 @@ import {
   type MailboxRow,
   type MessageRow,
 } from "./db.ts"
+import type { Country } from "./geo.ts"
 import { projectPath } from "./paths.ts"
 import {
-  isUsFederalHoliday,
+  isPublicHoliday,
   isWithinSendWindow,
   localMidnightEpochMs,
   nextSendWindowStart,
@@ -1343,6 +1344,8 @@ export interface CanSendNowOptions {
    * suppression; omit only for an interactive/manual send.
    */
   taskRunAfter?: number | null
+  /** The recipient's country, which picks the holiday calendar. */
+  leadCountry?: Country | null
   pacing?: Partial<PacingConfig>
   /** Injectable for deterministic tests. */
   random?: () => number
@@ -1439,6 +1442,9 @@ export function lastSentAt(mailboxId: string): number | null {
  * 06:00 their time is an own-goal, and the send window has to be evaluated
  * where the reader is. Pass null only when the lead's zone is genuinely
  * unknown; the operator's zone is then used as the least-bad fallback.
+ *
+ * `leadCountry` picks the holiday calendar for the same reason — a business in
+ * Ottawa is shut on Canada Day and open on the Fourth of July.
  */
 export function canSendNow(
   mailboxId: string,
@@ -1449,6 +1455,7 @@ export function canSendNow(
   const pacing = getPacingConfig(opts.pacing)
   const random = opts.random ?? Math.random
   const recipientZone = leadTimezone?.trim() || pacing.operatorTimezone
+  const recipientCountry: Country = opts.leadCountry ?? "US"
 
   if (isStopFilePresent()) {
     return {
@@ -1520,7 +1527,8 @@ export function canSendNow(
       retryAt: nextSendWindowStart(
         now + jitterMs(pacing, random),
         recipientZone,
-        windowRules(pacing)
+        windowRules(pacing),
+        recipientCountry
       ),
     }
   }
@@ -1531,15 +1539,25 @@ export function canSendNow(
       ok: false,
       code: "outside_window",
       reason: `outside the ${pacing.windowStartHour}:00-${pacing.windowEndHour}:00 window in ${recipientZone}${pacing.weekdaysOnly ? " (weekdays only)" : ""}`,
-      retryAt: nextSendWindowStart(now, recipientZone, windowRules(pacing)),
+      retryAt: nextSendWindowStart(
+        now,
+        recipientZone,
+        windowRules(pacing),
+        recipientCountry
+      ),
     }
   }
-  if (isUsFederalHoliday(now, recipientZone)) {
+  if (isPublicHoliday(now, recipientZone, recipientCountry)) {
     return {
       ok: false,
       code: "outside_window",
-      reason: `US federal holiday in ${recipientZone}`,
-      retryAt: nextSendWindowStart(now, recipientZone, windowRules(pacing)),
+      reason: `public holiday in ${recipientZone} (${recipientCountry})`,
+      retryAt: nextSendWindowStart(
+        now,
+        recipientZone,
+        windowRules(pacing),
+        recipientCountry
+      ),
     }
   }
 
@@ -1556,7 +1574,8 @@ export function canSendNow(
     const tomorrow = nextSendWindowStart(
       midnight + 24 * 60 * 60 * 1000 + 60_000,
       recipientZone,
-      windowRules(pacing)
+      windowRules(pacing),
+      recipientCountry
     )
     return {
       ok: false,
@@ -1866,6 +1885,8 @@ export interface SendMessageInput {
   fromName?: string
   /** The recipient's IANA zone, for the send window. */
   leadTimezone?: string | null
+  /** The recipient's country, for the holiday calendar and the footer rules. */
+  leadCountry?: Country | null
   /**
    * The inbound message this send answers, if any. Re-run through
    * `bodyRequestsOptOut()` INSIDE the send transaction: a "not interested"
@@ -2307,6 +2328,7 @@ export async function sendMessage(
 
   const gate = canSendNow(input.mailboxId, input.leadTimezone ?? null, {
     now: startedAt,
+    leadCountry: input.leadCountry ?? null,
     taskRunAfter: input.taskRunAfter,
     pacing: deps.pacing,
     random: deps.random,

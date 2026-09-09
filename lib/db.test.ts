@@ -32,6 +32,7 @@ import {
   getLeadById,
   insertLead,
   LEAD_STATUSES,
+  MIGRATION_COUNT,
   listLeads,
   updateLead,
   type LeadRow,
@@ -134,10 +135,13 @@ test("migration 3 backfills legacy dry-run rows and unblocks their real send", (
     process.env.VENDING_DB_PATH = legacyPath
     const fresh = getDb()
 
-    // Rewind the schema to its pre-migration-3 shape. Done by undoing
-    // migration 3 rather than by restating migrations 1 and 2, so this fixture
-    // cannot drift away from the real schema.
+    // Rewind the schema to its pre-migration-3 shape. Done by undoing the
+    // later migrations rather than by restating migrations 1 and 2, so this
+    // fixture cannot drift away from the real schema. Every migration added
+    // after this one has to be undone here too, or reopening replays it
+    // against a schema that already has it.
     fresh.exec(`
+      ALTER TABLE leads DROP COLUMN country;
       DROP INDEX ux_msg_step;
       DROP INDEX ux_msg_step_dryrun;
       ALTER TABLE messages DROP COLUMN dry_run;
@@ -177,12 +181,12 @@ test("migration 3 backfills legacy dry-run rows and unblocks their real send", (
     )
 
     closeDb()
-    const migrated = getDb() // migration 3 runs on open
+    const migrated = getDb() // migrations 3 and 4 run on open
 
     const { user_version: version } = migrated
       .prepare("PRAGMA user_version")
       .get() as { user_version: number }
-    assert.equal(version, 3)
+    assert.equal(version, MIGRATION_COUNT)
 
     const rows = migrated
       .prepare(`SELECT id, dry_run FROM messages ORDER BY sequence_step`)

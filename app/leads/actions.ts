@@ -17,6 +17,7 @@ import {
   listRecentEvents,
   updateLead,
 } from "@/lib/db"
+import { isCountry } from "@/lib/geo"
 import { findLocations, importCandidates } from "@/lib/leads"
 import { TARGET_TYPES, type LeadType, type OsmCandidate } from "@/lib/osm"
 import { humanizeEvent } from "../humanize-event"
@@ -30,6 +31,7 @@ export interface FindLocationsInput {
   place: string
   radiusMiles: number
   types: string[]
+  countries: string[]
 }
 
 export async function findLocationsAction(
@@ -46,8 +48,19 @@ export async function findLocationsAction(
   const radiusMiles = Number.isFinite(input.radiusMiles)
     ? Math.min(100, Math.max(1, input.radiusMiles))
     : 15
+  // Re-checked here rather than trusted: this is a server action, so its
+  // argument is whatever the browser sent, not whatever the dialog rendered.
+  const countries = input.countries.filter(isCountry)
+  if (countries.length === 0) {
+    throw new Error("Pick at least one country to search.")
+  }
 
-  const result = await findLocations({ place, radiusMiles, types })
+  const result = await findLocations({
+    place,
+    radiusMiles,
+    types,
+    countries,
+  })
 
   return {
     totalFound: result.totalFound,

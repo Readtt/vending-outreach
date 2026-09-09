@@ -12,6 +12,12 @@
 
 import { z } from "zod"
 
+import type { Country } from "./geo.ts"
+
+/** Named because every prompt here is a template literal, where an escaped
+ * newline inside a nested expression is easy to misread. */
+const NEWLINE = String.fromCharCode(10)
+
 // ---------------------------------------------------------------------------
 // Sender identity — the "About you" settings, threaded into every prompt
 // that produces something sent under the user's name.
@@ -20,10 +26,55 @@ import { z } from "zod"
 export interface SenderInfo {
   name: string
   company: string
-  /** Required on every commercial email by CAN-SPAM. Sent verbatim. */
+  /** Required on every commercial email by CAN-SPAM and by CASL. Sent verbatim. */
   address: string
   phone?: string
+  /** Used as the CASL contact when there is no phone number. */
+  website?: string
   offerTerms?: string
+}
+
+/**
+ * The identification and opt-out lines the law makes us carry, as one
+ * instruction the prompts drop in verbatim.
+ *
+ * The two regimes want overlapping but different things:
+ *
+ *  - **CAN-SPAM** (US): a valid physical postal address and a working
+ *    opt-out. No consent needed, and no obligation to say who you are beyond
+ *    not lying about it in the headers.
+ *  - **CASL** (Canada): the sender identified by name, a mailing address
+ *    *and* at least one of a phone number, an email address, or a web
+ *    address, plus an unsubscribe mechanism that stays live for 60 days.
+ *
+ * So a Canadian email needs one more contact detail than an American one.
+ * `assertCompliantBody` in `lib/mail-send.ts` checks the model actually
+ * included them before anything is sent — this instruction is where the
+ * requirement is stated, not where it is enforced.
+ */
+export function complianceInstruction(
+  sender: SenderInfo,
+  country: Country = "US"
+): string {
+  const lines = [
+    `- Include this postal address, verbatim, near the end: ${sender.address}`,
+  ]
+  if (country === "CA") {
+    const contact = sender.phone?.trim() || sender.website?.trim()
+    lines.push(
+      `- This business is in Canada, so CASL applies. Alongside the address, include ${
+        contact
+          ? `this contact detail, verbatim: ${contact}`
+          : "a way to reach the sender"
+      }.`,
+      "- Say plainly who the message is from — the sender's name and their business name, not just a first name."
+    )
+  } else {
+    lines.push(
+      "- That address is required by CAN-SPAM. Do not reword or abbreviate it."
+    )
+  }
+  return lines.join(NEWLINE)
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +93,10 @@ export interface SenderInfo {
  * worker) supplies at call time, while this is the stable, sender-level
  * half of the prompt.
  */
-export function buildFirstEmailSystemPrompt(sender: SenderInfo): string {
+export function buildFirstEmailSystemPrompt(
+  sender: SenderInfo,
+  country: Country = "US"
+): string {
   return `You write the first cold email in a short outreach sequence offering free vending machine placement to a specific local business. The offer: a vending machine installed at no cost to them${sender.offerTerms?.trim() ? `, ${sender.offerTerms.trim()}` : ", with a share of what it sells paid back to them"}.
 
 Rules, no exceptions:
@@ -53,7 +107,7 @@ Rules, no exceptions:
 - Never mention a price, a specific dollar figure, or a commitment you weren't given.
 - End with a plain opt-out line in your own words, equivalent to: "Just reply and I'll leave you alone."
 - Sign off as ${sender.name}, ${sender.company}${sender.phone ? `, ${sender.phone}` : ""}.
-- Include this physical address, verbatim, somewhere near the end, for CAN-SPAM: ${sender.address}
+${complianceInstruction(sender, country)}
 - Output the email body only. No subject line, no commentary, no markdown formatting.`
 }
 
@@ -62,7 +116,10 @@ Rules, no exceptions:
  * Not a second pitch — restating the offer is exactly what makes a
  * follow-up read as spam.
  */
-export function buildFollowUpDay4SystemPrompt(sender: SenderInfo): string {
+export function buildFollowUpDay4SystemPrompt(
+  sender: SenderInfo,
+  country: Country = "US"
+): string {
   return `You write a short day-4 follow-up, sent in the same email thread as an earlier first-touch email that got no reply.
 
 Rules, no exceptions:
@@ -73,7 +130,7 @@ Rules, no exceptions:
 - Plain, direct, human tone. No hype, no exclamation points.
 - End with a short opt-out line in your own words, equivalent to: "No worries if now's not the time — just reply and I'll leave you alone."
 - Sign off as ${sender.name}.
-- Include this physical address, verbatim, for CAN-SPAM: ${sender.address}
+${complianceInstruction(sender, country)}
 - Output the email body only. No subject line, no commentary, no markdown formatting.`
 }
 
@@ -81,7 +138,10 @@ Rules, no exceptions:
  * Short, in-thread, final nudge sent on day 9 if both prior emails got no
  * reply. Last message in the sequence — no step 3 follows this one.
  */
-export function buildFollowUpDay9SystemPrompt(sender: SenderInfo): string {
+export function buildFollowUpDay9SystemPrompt(
+  sender: SenderInfo,
+  country: Country = "US"
+): string {
   return `You write a short, final day-9 follow-up, sent in the same email thread as an earlier first-touch email and a day-4 follow-up, both of which got no reply. This is the last message in the sequence — nothing else is sent after this.
 
 Rules, no exceptions:
@@ -92,7 +152,7 @@ Rules, no exceptions:
 - Plain, direct, human tone. No hype, no exclamation points.
 - End with a short opt-out line in your own words, equivalent to: "I'll leave it here — reply anytime if that changes."
 - Sign off as ${sender.name}.
-- Include this physical address, verbatim, for CAN-SPAM: ${sender.address}
+${complianceInstruction(sender, country)}
 - Output the email body only. No subject line, no commentary, no markdown formatting.`
 }
 

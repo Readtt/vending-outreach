@@ -15,6 +15,7 @@
  */
 
 import { getDb, getSetting, type LeadStatus } from "../../lib/db.ts"
+import type { Country } from "../../lib/geo.ts"
 import type { SenderInfo } from "../../lib/prompts.ts"
 
 // ---------------------------------------------------------------------------
@@ -142,6 +143,7 @@ interface AboutSettingsShape {
   name?: string
   company?: string
   phone?: string
+  website?: string
   address?: string
   offerTerms?: string
 }
@@ -157,14 +159,19 @@ export interface SenderInfoResult {
 /**
  * Builds the `SenderInfo` every outbound prompt and fixed template needs.
  *
- * `address` is not optional and not cosmetic: CAN-SPAM requires a physical
- * postal address on every commercial email, so a blank one is a legal defect,
- * not a formatting one. Missing fields are returned by name so the handler can
- * dead-letter with "fill in Settings -> About you -> Your name" instead of a
- * stack trace.
+ * `address` is not optional and not cosmetic: both CAN-SPAM and CASL require a
+ * physical postal address on every commercial email, so a blank one is a legal
+ * defect, not a formatting one. Missing fields are returned by name so the
+ * handler can dead-letter with "fill in Settings -> About you -> Your name"
+ * instead of a stack trace.
+ *
+ * `country` adds one requirement rather than changing any: CASL wants a phone
+ * number or a website next to the address, so writing to a Canadian business
+ * without either is refused here rather than discovered by a regulator.
  */
 export function loadSenderInfo(
-  read: <T>(key: string) => T | undefined = getSetting
+  read: <T>(key: string) => T | undefined = getSetting,
+  country: Country = "US"
 ): SenderInfoResult {
   let about: AboutSettingsShape = {}
   try {
@@ -177,6 +184,7 @@ export function loadSenderInfo(
   const company = about.company?.trim() ?? ""
   const address = about.address?.trim() ?? ""
   const phone = about.phone?.trim() ?? ""
+  const website = about.website?.trim() ?? ""
   const offerTerms = about.offerTerms?.trim() ?? ""
 
   const missing: string[] = []
@@ -184,6 +192,11 @@ export function loadSenderInfo(
   if (company.length === 0) missing.push("About you -> Company")
   if (address.length === 0) {
     missing.push("About you -> Business address (required by CAN-SPAM)")
+  }
+  if (country === "CA" && phone.length === 0 && website.length === 0) {
+    missing.push(
+      "About you -> Phone or Website (CASL wants one of them next to your address)"
+    )
   }
   if (missing.length > 0) return { missing }
 
@@ -193,6 +206,7 @@ export function loadSenderInfo(
       company,
       address,
       ...(phone.length > 0 ? { phone } : {}),
+      ...(website.length > 0 ? { website } : {}),
       ...(offerTerms.length > 0 ? { offerTerms } : {}),
     },
     missing: [],

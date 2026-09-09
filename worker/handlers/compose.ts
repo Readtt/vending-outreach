@@ -18,6 +18,7 @@ import {
   updateLead,
   type LeadRow,
 } from "../../lib/db.ts"
+import type { Country } from "../../lib/geo.ts"
 import { generateGuardedText, hasRoleModel } from "./ai-bridge.ts"
 import {
   buildFirstEmailSystemPrompt,
@@ -224,14 +225,18 @@ export function validateDraft(draft: DraftToValidate): DraftValidation {
 // Prompting
 // ---------------------------------------------------------------------------
 
-function systemPromptFor(step: SequenceStep, sender: SenderInfo): string {
+function systemPromptFor(
+  step: SequenceStep,
+  sender: SenderInfo,
+  country: Country
+): string {
   switch (step) {
     case 1:
-      return buildFirstEmailSystemPrompt(sender)
+      return buildFirstEmailSystemPrompt(sender, country)
     case 4:
-      return buildFollowUpDay4SystemPrompt(sender)
+      return buildFollowUpDay4SystemPrompt(sender, country)
     case 9:
-      return buildFollowUpDay9SystemPrompt(sender)
+      return buildFollowUpDay9SystemPrompt(sender, country)
   }
 }
 
@@ -358,7 +363,14 @@ export async function handleCompose(
   }
 
   // --- 2. Sender identity --------------------------------------------------
-  const senderResult = (deps.loadSenderInfo ?? loadSenderInfo)()
+  // Unknown country resolves to Canada, matching `enrichLead`: the strips go
+  // quiet near the border, and CASL asks for strictly more than CAN-SPAM, so
+  // the unknown case should satisfy both.
+  const country: Country = lead.country ?? "CA"
+  const senderResult = (deps.loadSenderInfo ?? loadSenderInfo)(
+    undefined,
+    country
+  )
   if (!senderResult.sender) {
     // A config error, not a transient one: retrying cannot fill in a form.
     return deadLetter(
@@ -378,7 +390,7 @@ export async function handleCompose(
 
   // --- 3 + 4. Generate, validate, regenerate once --------------------------
   const generate = deps.generateText ?? generateGuardedText
-  const system = systemPromptFor(step, sender)
+  const system = systemPromptFor(step, sender, country)
   const basePrompt = buildUserPrompt(step, lead, deps.fence)
 
   const prior = (deps.readEarliestOutbound ?? readEarliestOutbound)(leadId)

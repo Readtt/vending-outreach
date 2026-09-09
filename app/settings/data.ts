@@ -22,6 +22,7 @@ import {
   taskQueueSummary,
 } from "@/lib/db"
 import { AI_ROLES, getRoleModel } from "@/lib/ai"
+import { isCountry, type Country } from "@/lib/geo"
 import {
   defaultLabelForKind,
   type MailboxPublic,
@@ -130,15 +131,24 @@ function isBusinessTypeId(value: string): value is BusinessTypeId {
 }
 
 export interface TargetingSettings {
-  /** City or ZIP — free text; geocoding into a US-only bbox is the worker's job. */
+  /** Town, ZIP, or postal code — free text; geocoding is the worker's job. */
   location: string
   radiusMiles: number
   businessTypes: BusinessTypeId[]
+  /**
+   * Which countries searches may reach into. Never empty — a saved setting
+   * with nothing ticked would make every search throw.
+   */
+  countries: Country[]
 }
 
 export const DEFAULT_TARGETING_SETTINGS: TargetingSettings = {
   location: "",
   radiusMiles: 15,
+  // The US alone, because the two countries are not interchangeable: a
+  // Canadian lead is emailed under CASL, which needs consent the US does not
+  // ask for. Adding Canada should be something someone chose.
+  countries: ["US"],
   // All ten are sensible vending targets per the build spec's own ground
   // truth (§10) — preselect everything rather than an arbitrary subset.
   businessTypes: [...BUSINESS_TYPE_IDS],
@@ -149,6 +159,7 @@ const TARGETING_SETTINGS_KEY = "targeting"
 export function getTargetingSettings(): TargetingSettings {
   const stored = getSetting<Partial<TargetingSettings>>(TARGETING_SETTINGS_KEY)
   const businessTypes = stored?.businessTypes?.filter(isBusinessTypeId)
+  const countries = stored?.countries?.filter(isCountry)
   return {
     ...DEFAULT_TARGETING_SETTINGS,
     ...stored,
@@ -156,6 +167,10 @@ export function getTargetingSettings(): TargetingSettings {
       businessTypes && businessTypes.length > 0
         ? businessTypes
         : DEFAULT_TARGETING_SETTINGS.businessTypes,
+    countries:
+      countries && countries.length > 0
+        ? countries
+        : DEFAULT_TARGETING_SETTINGS.countries,
   }
 }
 
@@ -171,7 +186,9 @@ export interface AboutSettings {
   name: string
   company: string
   phone: string
-  /** Required for CAN-SPAM — every commercial email must carry it. */
+  /** Stands in for the phone number when CASL wants a second contact detail. */
+  website: string
+  /** Required for CAN-SPAM and CASL — every commercial email must carry it. */
   address: string
   offerTerms: string
 }
@@ -180,6 +197,7 @@ export const DEFAULT_ABOUT_SETTINGS: AboutSettings = {
   name: "",
   company: "",
   phone: "",
+  website: "",
   address: "",
   offerTerms: "",
 }

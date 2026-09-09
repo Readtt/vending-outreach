@@ -40,6 +40,9 @@ import {
 } from "./osm.ts"
 import { getDb } from "./db.ts"
 
+/** Most of this file predates Canada support and searches the US only. */
+const US = ["US"] as const
+
 assert.ok(
   process.env.VENDING_DB_PATH?.includes("vending-osm-test-"),
   "refusing to run: the tests are not pointed at a throwaway database"
@@ -226,7 +229,7 @@ test("isWithinUs / clampToUs, table-driven", () => {
     if (c.clamp === "throws") {
       assert.throws(
         () => clampToUs(c.bbox),
-        /does not overlap any US/,
+        /does not overlap United States/,
         `${c.name}: clampToUs should throw`
       )
       continue
@@ -482,7 +485,7 @@ test("searchOverpass maps elements, way centers included", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["storage"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["storage"], US, deps(stub.fn))
   assert.equal(found.length, 1)
   assert.deepEqual(found[0], {
     osmId: "way/42",
@@ -495,6 +498,7 @@ test("searchOverpass maps elements, way centers included", async () => {
     openingHours: "24/7",
     lat: 40.1,
     lng: -83.1,
+    country: "US",
   })
 
   assert.equal(stub.calls.length, 1)
@@ -530,7 +534,7 @@ test("searchOverpass drops unnamed elements", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["warehouse"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["warehouse"], US, deps(stub.fn))
   assert.deepEqual(
     found.map((c) => c.name),
     ["Real Warehouse"]
@@ -551,7 +555,7 @@ test("searchOverpass drops elements with no coordinates or no matching tag", asy
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["warehouse"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["warehouse"], US, deps(stub.fn))
   assert.deepEqual(
     found.map((c) => c.osmId),
     ["node/9"]
@@ -576,7 +580,7 @@ test("searchOverpass sanitizes an injection payload in an OSM name", async () =>
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["gym"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn))
   assert.equal(found.length, 1)
   const { name } = found[0]
   assert.ok(!name.includes("<"), `angle brackets survived: ${name}`)
@@ -614,7 +618,7 @@ test("searchOverpass drops a candidate tagged into another country", async () =>
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["gym"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn))
   assert.deepEqual(
     found.map((c) => c.name),
     ["Detroit Fitness"]
@@ -636,7 +640,7 @@ test("address is null without a street", async () => {
       ],
     }),
   ])
-  const found = await searchOverpass(freshBBox(), ["laundry"], deps(stub.fn))
+  const found = await searchOverpass(freshBBox(), ["laundry"], US, deps(stub.fn))
   assert.equal(found[0].address, null)
 })
 
@@ -653,13 +657,13 @@ test("a cache hit avoids a second fetch", async () => {
     }),
   ])
 
-  const first = await searchOverpass(bbox, ["gym"], deps(stub.fn))
+  const first = await searchOverpass(bbox, ["gym"], US, deps(stub.fn))
   assert.equal(first.length, 1)
   assert.equal(stub.calls.length, 1)
 
   // Same bbox and same types produce the same request and so the same cache
   // key. `forbiddenFetch` makes "did it fetch again?" unambiguous.
-  const second = await searchOverpass(bbox, ["gym"], deps(forbiddenFetch))
+  const second = await searchOverpass(bbox, ["gym"], US, deps(forbiddenFetch))
   assert.deepEqual(second, first)
 
   const row = getDb()
@@ -678,7 +682,7 @@ test("a 429 is retried twice and then surfaced", async () => {
   const stub = stubFetch([tooMany, tooMany, tooMany])
 
   await assert.rejects(
-    searchOverpass(freshBBox(), ["gym"], deps(stub.fn, slept)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn, slept)),
     (err: unknown) => {
       assert.ok(err instanceof Error)
       assert.match(err.message, /Overpass: HTTP 429 after 3 attempt\(s\)/)
@@ -706,7 +710,7 @@ test("a 504 is retried, and a success on the retry is returned", async () => {
     }),
   ])
 
-  const found = await searchOverpass(freshBBox(), ["gym"], deps(stub.fn, slept))
+  const found = await searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn, slept))
   assert.deepEqual(
     found.map((c) => c.name),
     ["Slow Gym"]
@@ -717,7 +721,7 @@ test("a 504 is retried, and a success on the retry is returned", async () => {
 test("a non-retryable status is surfaced immediately", async () => {
   const stub = stubFetch([() => new Response("nope", { status: 400 })])
   await assert.rejects(
-    searchOverpass(freshBBox(), ["gym"], deps(stub.fn)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn)),
     /Overpass: HTTP 400 after 1 attempt/
   )
   assert.equal(stub.calls.length, 1)
@@ -731,7 +735,7 @@ test("an HTML rate-limit page is reported as such, not as a parse crash", async 
     }),
   ])
   await assert.rejects(
-    searchOverpass(freshBBox(), ["gym"], deps(stub.fn)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn)),
     /response was not JSON/
   )
 })
@@ -748,9 +752,9 @@ test("only one Overpass request is in flight at a time", async () => {
   }
 
   await Promise.all([
-    searchOverpass(freshBBox(), ["gym"], deps(gated)),
-    searchOverpass(freshBBox(), ["gym"], deps(gated)),
-    searchOverpass(freshBBox(), ["gym"], deps(gated)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(gated)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(gated)),
+    searchOverpass(freshBBox(), ["gym"], US, deps(gated)),
   ])
 
   assert.equal(maxInFlight, 1, "Overpass policy is concurrency 1, process-wide")
@@ -772,7 +776,7 @@ test("geocodePlace resolves a place, US-restricted", async () => {
     ]),
   ])
 
-  const result = await geocodePlace("Columbus, OH", deps(stub.fn))
+  const result = await geocodePlace("Columbus, OH", US, deps(stub.fn))
   assert.ok(result)
   assert.ok(Math.abs(result.lat - 39.9622601) < 1e-9)
   assert.ok(Math.abs(result.lng - -83.0007065) < 1e-9)
@@ -800,11 +804,11 @@ test("geocodePlace resolves a place, US-restricted", async () => {
 test("geocodePlace returns undefined for no match", async () => {
   const stub = stubFetch([jsonResponse([])])
   assert.equal(
-    await geocodePlace("Zzzz not a place at all", deps(stub.fn)),
+    await geocodePlace("Zzzz not a place at all", US, deps(stub.fn)),
     undefined
   )
   await assert.rejects(
-    () => geocodePlace("   ", deps(forbiddenFetch)),
+    () => geocodePlace("   ", US, deps(forbiddenFetch)),
     /query is empty/
   )
 })
@@ -845,7 +849,7 @@ test("geocodePlace sanitizes display_name and paces itself", async () => {
     },
   }
 
-  const result = await geocodePlace("New York, NY", {
+  const result = await geocodePlace("New York, NY", US, {
     ...frozenDeps,
     fetch: stub.fn,
   })
@@ -855,7 +859,7 @@ test("geocodePlace sanitizes display_name and paces itself", async () => {
     `a fence-escape payload survived display_name: ${result.displayName}`
   )
 
-  await geocodePlace("Boston, MA", { ...frozenDeps, fetch: second.fn })
+  await geocodePlace("Boston, MA", US, { ...frozenDeps, fetch: second.fn })
   assert.equal(
     slept.at(-1),
     1000,
@@ -869,7 +873,7 @@ test("geocodePlace falls back to a small bbox when Nominatim omits one", async (
       { lat: "44.9778", lon: "-93.265", display_name: "Minneapolis" },
     ]),
   ])
-  const result = await geocodePlace("Minneapolis, MN", deps(stub.fn))
+  const result = await geocodePlace("Minneapolis, MN", US, deps(stub.fn))
   assert.ok(result)
   assert.ok(result.bbox.north > result.bbox.south)
   assert.equal(isWithinUs(result.bbox), true)
@@ -886,8 +890,8 @@ test("a Nominatim cache hit avoids a second fetch", async () => {
       },
     ]),
   ])
-  const first = await geocodePlace("Seattle, WA", deps(stub.fn))
-  const second = await geocodePlace("Seattle, WA", deps(forbiddenFetch))
+  const first = await geocodePlace("Seattle, WA", US, deps(stub.fn))
+  const second = await geocodePlace("Seattle, WA", US, deps(forbiddenFetch))
   assert.deepEqual(second, first)
 })
 

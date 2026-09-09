@@ -1,6 +1,7 @@
 import { AutoRefresh } from "@/components/auto-refresh"
 import { EmptyState, Page, PageHeader } from "@/components/page"
 import { countLeads } from "@/lib/db"
+import { getTargetingSettings } from "../settings/data"
 import { ApprovalBanner } from "./approval-banner"
 import { FindLocationsDialog } from "./find-locations-dialog"
 import { LeadTable } from "./lead-table"
@@ -13,6 +14,7 @@ export default function LeadsPage() {
   const { items, total, cap } = getLeadListData()
   const typeOptions = getBusinessTypeOptions()
   const heldCount = countLeads({ status: ["held"] })
+  const { countries } = getTargetingSettings()
 
   return (
     <Page width="wide">
@@ -20,7 +22,12 @@ export default function LeadsPage() {
       <PageHeader
         title="Leads"
         description="Every business found so far, and what has happened with each one."
-        action={<FindLocationsDialog typeOptions={typeOptions} />}
+        action={
+          <FindLocationsDialog
+            typeOptions={typeOptions}
+            defaultCountries={countries}
+          />
+        }
       />
 
       <ApprovalBanner heldCount={heldCount} />

@@ -9,6 +9,7 @@
  */
 
 import { revalidatePath } from "next/cache"
+import { isCountry } from "@/lib/geo"
 import {
   deleteMailbox as deleteMailboxRow,
   deleteProvider as deleteProviderRow,
@@ -251,6 +252,8 @@ export async function saveTargetingSettingsAction(
       (BUSINESS_TYPE_IDS as string[]).includes(v)
     )
 
+  const countries = formData.getAll("countries").filter(isCountry)
+
   const settings: TargetingSettings = {
     location,
     radiusMiles,
@@ -258,6 +261,10 @@ export async function saveTargetingSettingsAction(
       businessTypes.length > 0
         ? businessTypes
         : DEFAULT_TARGETING_SETTINGS.businessTypes,
+    // Unticking both would make every search throw. Falling back beats
+    // saving a setting that only fails later, somewhere else.
+    countries:
+      countries.length > 0 ? countries : DEFAULT_TARGETING_SETTINGS.countries,
   }
   saveTargetingSettings(settings)
   revalidatePath("/settings")
@@ -284,6 +291,7 @@ export async function saveAboutSettingsAction(
     name: formString(formData, "name"),
     company: formString(formData, "company"),
     phone: formString(formData, "phone"),
+    website: formString(formData, "website"),
     address,
     offerTerms:
       formString(formData, "offerTerms") || DEFAULT_ABOUT_SETTINGS.offerTerms,

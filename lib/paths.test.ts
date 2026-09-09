@@ -15,7 +15,11 @@ test("projectRoot finds the folder holding this project's package.json", () => {
 
 test("everything the app writes stays under the project folder", () => {
   // The point of the module: no %LOCALAPPDATA%, no ~/.config, no temp dir.
-  for (const target of [dataDir(), projectPath("outbox-dryrun"), projectPath("STOP")]) {
+  for (const target of [
+    dataDir(),
+    projectPath("outbox-dryrun"),
+    projectPath("STOP"),
+  ]) {
     assert.ok(
       target.startsWith(projectRoot() + path.sep),
       `${target} escaped the project folder`
@@ -29,20 +33,28 @@ test("describeSyncRisk names the sync client rather than answering yes/no", () =
     describeSyncRisk("C:/Users/sam/OneDrive/Documents/app/data/app.db"),
     "OneDrive"
   )
-  assert.equal(describeSyncRisk("/Users/sam/Dropbox/app/data/app.db"), "Dropbox")
+  assert.equal(
+    describeSyncRisk("/Users/sam/Dropbox/app/data/app.db"),
+    "Dropbox"
+  )
   assert.equal(
     describeSyncRisk("/Users/sam/Google Drive/app/data/app.db"),
     "Google Drive"
   )
   assert.equal(
-    describeSyncRisk("/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/app.db"),
+    describeSyncRisk(
+      "/Users/sam/Library/Mobile Documents/com~apple~CloudDocs/app.db"
+    ),
     "iCloud Drive"
   )
 })
 
 test("describeSyncRisk is quiet about ordinary paths", () => {
   assert.equal(describeSyncRisk("C:/code/vending-outreach/data/app.db"), null)
-  assert.equal(describeSyncRisk("/home/sam/src/vending-outreach/data/app.db"), null)
+  assert.equal(
+    describeSyncRisk("/home/sam/src/vending-outreach/data/app.db"),
+    null
+  )
   // "drive" on its own is a directory name, not a sync client.
   assert.equal(describeSyncRisk("/mnt/drive/app.db"), null)
 })

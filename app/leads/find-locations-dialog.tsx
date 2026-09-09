@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+import { COUNTRIES, COUNTRY_LABELS, type Country } from "@/lib/geo"
 import { findLocationsAction, importLeadsAction } from "./actions"
 import type {
   BusinessTypeOption,
@@ -33,9 +34,14 @@ type SearchState =
 
 interface FindLocationsDialogProps {
   typeOptions: BusinessTypeOption[]
+  /** From Settings. The dialog starts here and can be changed per search. */
+  defaultCountries: Country[]
 }
 
-export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
+export function FindLocationsDialog({
+  typeOptions,
+  defaultCountries,
+}: FindLocationsDialogProps) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [place, setPlace] = useState("")
@@ -43,8 +49,21 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(
     () => new Set(typeOptions.map((t) => t.id))
   )
+  const [countries, setCountries] = useState<Country[]>(defaultCountries)
   const [state, setState] = useState<SearchState>({ status: "idle" })
   const [isPending, startTransition] = useTransition()
+
+  /** Unticking the last country would leave nowhere to search, so the last
+   * one ticked stays ticked. */
+  function toggleCountry(code: Country) {
+    setCountries((prev) =>
+      prev.includes(code)
+        ? prev.length > 1
+          ? prev.filter((c) => c !== code)
+          : prev
+        : [...prev, code]
+    )
+  }
 
   function toggleType(id: string) {
     setSelectedTypes((prev) => {
@@ -62,6 +81,7 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
         place,
         radiusMiles,
         types: Array.from(selectedTypes),
+        countries,
       })
         .then((result) => setState({ status: "results", result }))
         .catch((err: unknown) =>
@@ -113,20 +133,42 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
           <DialogTitle>Find businesses</DialogTitle>
           <DialogDescription>
             Searches OpenStreetMap, a free public map, for businesses near a
-            place. US only. It can take 10–30 seconds.
+            place. It can take 10–30 seconds.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="find-place">City, state, or ZIP</Label>
+            <Label htmlFor="find-place">Town, ZIP, or postal code</Label>
             <Input
               id="find-place"
               value={place}
               onChange={(e) => setPlace(e.target.value)}
-              placeholder="Columbus, OH or 43215"
+              placeholder={
+                countries.includes("CA")
+                  ? "Columbus, OH — London, ON — K1A 0B1"
+                  : "Columbus, OH or 43215"
+              }
               disabled={state.status === "searching"}
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Countries</Label>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {COUNTRIES.map((code) => (
+                <label key={code} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={countries.includes(code)}
+                    onChange={() => toggleCountry(code)}
+                    disabled={state.status === "searching"}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  {COUNTRY_LABELS[code]}
+                </label>
+              ))}
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -188,8 +230,8 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
               </p>
               {state.result.clamped && (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                  The search area was trimmed to inside the US. This app only
-                  emails US businesses on purpose.
+                  The search area was trimmed to stay inside{" "}
+                  {countries.map((c) => COUNTRY_LABELS[c]).join(" and ")}.
                 </p>
               )}
               {state.result.newCount === 0 && (

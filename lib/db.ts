@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
+import { countryForPoint, type Country } from "./geo.ts"
 import { dataDir, describeSyncRisk } from "./paths.ts"
 
 // ---------------------------------------------------------------------------
@@ -256,7 +257,45 @@ const migrations: Migration[] = [
         WHERE direction = 'out' AND sequence_step IS NOT NULL AND dry_run = 1;
     `)
   },
+  // Migration 4: record which country each lead is in.
+  //
+  // Not cosmetic. The country decides which law the email is written to
+  // satisfy — CAN-SPAM in the US, CASL in Canada — and CASL wants a phone or
+  // website next to the postal address that CAN-SPAM is happy without. It
+  // also decides which public holidays the send window skips, and which
+  // implied-consent rule applies to the address itself. None of that can be
+  // re-derived at send time from a lead row that only has an address string.
+  //
+  // Existing rows are backfilled from their coordinates where the bounding
+  // strips can answer. Rows the strips cannot place stay NULL, which
+  // `lib/leads.ts` reads as "assume Canada" — the stricter of the two.
+  (db) => {
+    db.exec(`
+      ALTER TABLE leads ADD COLUMN country TEXT
+        CHECK (country IN ('US','CA'));
+    `)
+
+    const rows = db
+      .prepare(
+        `SELECT id, lat, lng FROM leads
+          WHERE country IS NULL AND lat IS NOT NULL AND lng IS NOT NULL`
+      )
+      .all() as unknown as { id: string; lat: number; lng: number }[]
+
+    const update = db.prepare(`UPDATE leads SET country = ? WHERE id = ?`)
+    for (const row of rows) {
+      const country = countryForPoint(row.lat, row.lng)
+      if (country) update.run(country, row.id)
+    }
+  },
 ]
+
+/**
+ * The schema version a freshly-opened database ends up at. Exported so a test
+ * that rewinds the schema can assert it came all the way back forward without
+ * being edited every time a migration is added.
+ */
+export const MIGRATION_COUNT = migrations.length
 
 function migrate(db: DatabaseSync): void {
   const { user_version: currentVersion } = db
@@ -394,6 +433,8 @@ export interface LeadRow {
   lat: number | null
   lng: number | null
   timezone: string | null
+  /** NULL where nothing could place the business. See migration 4. */
+  country: Country | null
   email: string | null
   contact_name: string | null
   status: LeadStatus
@@ -1013,6 +1054,7 @@ export interface InsertLeadInput {
   lat?: number | null
   lng?: number | null
   timezone?: string | null
+  country?: Country | null
   source: string
   /** Stable OSM identity, e.g. "node/1234567". Used for dedupe. */
   osmId?: string | null
@@ -1040,8 +1082,9 @@ export function insertLead(input: InsertLeadInput): LeadRow {
   // by the unique index, which cannot race, where a pre-check can.
   db.prepare(
     `INSERT INTO leads (id, name, type, address, phone, website, lat, lng,
-                        timezone, status, score, source, osm_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, ?, ?, ?)
+                        timezone, country, status, score, source, osm_id,
+                        created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, ?, ?, ?)
      ON CONFLICT(osm_id) DO NOTHING`
   ).run(
     id,
@@ -1053,6 +1096,7 @@ export function insertLead(input: InsertLeadInput): LeadRow {
     input.lat ?? null,
     input.lng ?? null,
     input.timezone ?? null,
+    input.country ?? null,
     input.source,
     osmId,
     Date.now()
@@ -1221,6 +1265,7 @@ export const UPDATABLE_LEAD_COLUMNS = [
   "lat",
   "lng",
   "timezone",
+  "country",
   "email",
   "contact_name",
   "status",

@@ -26,7 +26,35 @@
 import { createHash } from "node:crypto"
 
 import { getCachedFetch, logEvent, setCachedFetch } from "./db.ts"
+import {
+  assertValidBBox,
+  bboxAround,
+  countryCodesParam,
+  countryFromAddress,
+  type BBox,
+  type Country,
+} from "./geo.ts"
 import { sanitize } from "./untrusted.ts"
+
+// The bounding-box geometry lives in `lib/geo.ts` alongside the country
+// tables it exists to serve. Re-exported here because a caller searching OSM
+// wants a box and a search from one import, and because moving it would have
+// meant rewriting every call site for no gain.
+export {
+  bboxAround,
+  boundsFor,
+  CA_BOUNDS,
+  clampToCountries,
+  clampToUs,
+  countryForPoint,
+  isWithinCountries,
+  isWithinUs,
+  MAX_RADIUS_MILES,
+  MILES_PER_DEGREE_LATITUDE,
+  US_BOUNDS,
+  type BBox,
+  type Country,
+} from "./geo.ts"
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -44,353 +72,6 @@ export function userAgent(): string {
   const contact = process.env.OSM_CONTACT_EMAIL?.trim()
   const base = "vending-outreach/0.0.1 (local-first small-business outreach)"
   return contact ? `${base} (${contact})` : base
-}
-
-// ---------------------------------------------------------------------------
-// Bounding boxes
-// ---------------------------------------------------------------------------
-
-export interface BBox {
-  south: number
-  west: number
-  north: number
-  east: number
-}
-
-function assertValidBBox(bbox: BBox, label = "bbox"): void {
-  for (const [name, value] of Object.entries(bbox)) {
-    if (!Number.isFinite(value)) {
-      throw new Error(`${label}: ${name} is not a finite number (${value})`)
-    }
-  }
-  if (bbox.south < -90 || bbox.north > 90) {
-    throw new Error(
-      `${label}: latitudes must be within [-90, 90] (got ${bbox.south}..${bbox.north})`
-    )
-  }
-  if (bbox.west < -180 || bbox.east > 180) {
-    throw new Error(
-      `${label}: longitudes must be within [-180, 180] (got ${bbox.west}..${bbox.east})`
-    )
-  }
-  if (bbox.south > bbox.north) {
-    throw new Error(
-      `${label}: south (${bbox.south}) is north of north (${bbox.north})`
-    )
-  }
-  if (bbox.west > bbox.east) {
-    // An antimeridian-crossing box is legal in some APIs and is silently
-    // wrong in Overpass, which reads it as a box spanning the whole globe the
-    // other way round. Refuse rather than issue that query.
-    throw new Error(
-      `${label}: west (${bbox.west}) is east of east (${bbox.east}). ` +
-        "A box crossing the antimeridian must be split into two."
-    )
-  }
-}
-
-/**
- * US bounding regions, as longitude strips whose northern (and, along the
- * Rio Grande, southern) edge steps to stay on the US side of the border.
- *
- * ### Why this is a list of strips and not one rectangle
- *
- * Spec §0.5 makes US-only bboxes a non-negotiable invariant: a bbox reaching
- * into Canada puts the campaign under CASL, which — unlike CAN-SPAM — has no
- * cold-email carve-out. One `24.4..49.4 / -125..-66.9` rectangle contains
- * Toronto, Windsor, and the whole Niagara peninsula, so it would satisfy the
- * type signature and none of the requirement.
- *
- * Each strip's north edge is set to the border latitude at that longitude,
- * rounded toward the US. The values are approximate by design and always err
- * inward: under-coverage costs leads, over-coverage costs a legal exposure.
- *
- * ### Known under-coverage — read before "fixing" a value
- *
- * The border is not rectangle-separable everywhere, and three places are
- * genuinely impossible rather than merely unrefined:
- *
- *  - **Detroit / Windsor.** Windsor ON sits *south-east* of downtown Detroit
- *    (both ≈42.3°N, ≈-83.05°). Ontario also dips to 41.68°N at Middle Island.
- *    No axis-aligned rectangle contains Detroit and excludes Ontario, so the
- *    `-83.30..-82.40` strip stops at 41.65°N and Detroit is outside it.
- *  - **Niagara Falls NY** (43.09°N, -79.06°) is inside the same kind of
- *    pocket as Fort Erie ON; the `-79.00..-76.50` strip starts east of it.
- *    Buffalo (42.89°N, -78.85°) *is* covered.
- *  - **The Alaska panhandle.** Juneau/Sitka/Ketchikan are a coastal ribbon
- *    with British Columbia immediately inland; every rectangle around them
- *    contains BC. It is omitted entirely.
- *
- * The correct fix is a point-in-polygon test against a US boundary polygon,
- * or an Overpass `area["ISO3166-1"="US"]` filter. Both are real work and
- * neither is what a rectangle-clamping API can express. `searchOverpass`
- * additionally drops any candidate tagged `addr:country` other than the US,
- * which is defence in depth rather than a substitute.
- */
-export const US_BOUNDS: readonly BBox[] = [
-  // --- Lower 48, west to east ---------------------------------------------
-  // north edge: below Vancouver Island (Victoria BC is 48.43°N)
-  { south: 32.5, west: -124.8, north: 48.3, east: -123.0 },
-  // north edge: the 49th parallel border, which runs from -123.32 to -95.15
-  { south: 32.5, west: -123.0, north: 48.99, east: -117.2 },
-  // south edge: the California/Baja line at 32.53°N
-  { south: 32.5, west: -117.2, north: 48.99, east: -114.5 },
-  // south edge: the Arizona/Sonora line at 31.33°N
-  { south: 31.3, west: -114.5, north: 48.99, east: -108.2 },
-  // south edge: the New Mexico bootheel step up to 31.78°N
-  { south: 31.75, west: -108.2, north: 48.99, east: -106.5 },
-  // south edge: the Rio Grande, which runs diagonally from El Paso to the Gulf
-  { south: 29.3, west: -106.5, north: 48.99, east: -104.0 },
-  { south: 29.8, west: -104.0, north: 48.99, east: -102.0 },
-  { south: 28.6, west: -102.0, north: 48.99, east: -100.0 },
-  { south: 26.4, west: -100.0, north: 48.99, east: -98.0 },
-  // south edge: Brownsville TX, the southern tip of the lower 48
-  { south: 25.9, west: -98.0, north: 48.99, east: -96.5 },
-  // south edge: the Florida Keys (Key West is 24.55°N)
-  { south: 24.4, west: -96.5, north: 48.99, east: -95.2 },
-  // north edge: the Rainy River / Lake Superior border, ≥47.9°N here
-  { south: 24.4, west: -95.2, north: 47.8, east: -90.0 },
-  // north edge: below Sault Ste. Marie MI (46.49°N)
-  { south: 24.4, west: -90.0, north: 46.2, east: -84.6 },
-  // north edge: Michigan's lower peninsula, below the Lake Huron border
-  { south: 24.4, west: -84.6, north: 45.5, east: -83.3 },
-  // north edge: Ontario reaches 41.68°N here. See the note above.
-  { south: 24.4, west: -83.3, north: 41.65, east: -82.4 },
-  // north edge: the Lake Erie north shore, ≥42.25°N east of Point Pelee
-  { south: 24.4, west: -82.4, north: 42.2, east: -79.0 },
-  // north edge: below the Lake Ontario border; covers Buffalo and Rochester
-  { south: 24.4, west: -79.0, north: 43.2, east: -76.5 },
-  // north edge: below the St. Lawrence
-  { south: 24.4, west: -76.5, north: 44.1, east: -74.8 },
-  // north edge: the 45th parallel border (NY / VT / NH)
-  { south: 24.4, west: -74.8, north: 44.95, east: -71.5 },
-  // north edge: western Maine, where the border turns up the height of land
-  { south: 24.4, west: -71.5, north: 45.3, east: -70.2 },
-  { south: 24.4, west: -70.2, north: 46.6, east: -69.2 },
-  // north edge: the St. John river (Fort Kent ME is 47.26°N)
-  { south: 24.4, west: -69.2, north: 47.3, east: -67.8 },
-  // north edge: Down East Maine, west of the New Brunswick line
-  { south: 24.4, west: -67.8, north: 44.95, east: -66.9 },
-  // --- Alaska ---------------------------------------------------------------
-  // Everything west of the 141st meridian border. The panhandle is omitted.
-  { south: 54.5, west: -168.2, north: 71.5, east: -141.0 },
-  // The western Aleutians, which sit east of the antimeridian
-  { south: 51.0, west: 172.0, north: 53.5, east: 179.99 },
-  // --- Hawaii ---------------------------------------------------------------
-  { south: 18.86, west: -160.3, north: 22.3, east: -154.75 },
-]
-
-function intersectBBox(a: BBox, b: BBox): BBox | undefined {
-  const south = Math.max(a.south, b.south)
-  const north = Math.min(a.north, b.north)
-  const west = Math.max(a.west, b.west)
-  const east = Math.min(a.east, b.east)
-  if (south >= north || west >= east) return undefined
-  return { south, west, north, east }
-}
-
-function bboxArea(bbox: BBox): number {
-  return (bbox.north - bbox.south) * (bbox.east - bbox.west)
-}
-
-function containsPoint(region: BBox, lat: number, lng: number): boolean {
-  return (
-    lat >= region.south &&
-    lat <= region.north &&
-    lng >= region.west &&
-    lng <= region.east
-  )
-}
-
-/**
- * Sample coordinates along one axis: every region edge that falls strictly
- * inside `[lo, hi]`, plus the two endpoints, reduced to one representative
- * value per resulting interval.
- *
- * Region membership is constant across each interval — the only places it can
- * change are the region edges — so testing one point per interval is exact,
- * not a heuristic. A degenerate span (`lo === hi`, i.e. a point or line bbox)
- * collapses to the single value, which is why a point query works at all.
- */
-function sampleAxis(
-  lo: number,
-  hi: number,
-  edges: readonly number[]
-): number[] {
-  if (lo === hi) return [lo]
-  const cuts = [lo, hi]
-  for (const edge of edges) {
-    if (edge > lo && edge < hi) cuts.push(edge)
-  }
-  cuts.sort((a, b) => a - b)
-
-  const samples: number[] = []
-  for (let i = 0; i < cuts.length - 1; i++) {
-    const mid = (cuts[i] + cuts[i + 1]) / 2
-    // A midpoint that rounds onto a cut would test the boundary instead of
-    // the interval; only possible for spans near the float epsilon.
-    if (mid > cuts[i] && mid < cuts[i + 1]) samples.push(mid)
-  }
-  // The endpoints matter in their own right: a bbox whose north edge sits
-  // exactly on a border latitude is inside, one a hair above is not.
-  samples.push(lo, hi)
-  return samples
-}
-
-/**
- * True only if every point of `bbox` lies inside some US region.
- *
- * ### Deviation from the brief, deliberate
- *
- * The pinned doc comment said "inside **one** US bounding region". Taken
- * literally that rejects any box straddling two strips — including a 25-mile
- * box around Kansas City, which sits on the `-96.50 / -95.20` seam. Since the
- * strips only exist because one rectangle cannot describe the country, the
- * union is what the invariant actually means, and the union is what is
- * tested here.
- *
- * Implemented as a sweep over the arrangement the region edges induce on the
- * bbox rather than by rectangle subtraction: subtraction drops zero-area
- * pieces, which silently makes every degenerate (single-point) bbox read as
- * "covered by nothing" and therefore outside the US — a check that returns
- * `false` for Columbus, Ohio and for Toronto alike is not a check.
- */
-export function isWithinUs(bbox: BBox): boolean {
-  assertValidBBox(bbox)
-
-  const lats = sampleAxis(
-    bbox.south,
-    bbox.north,
-    US_BOUNDS.flatMap((r) => [r.south, r.north])
-  )
-  const lngs = sampleAxis(
-    bbox.west,
-    bbox.east,
-    US_BOUNDS.flatMap((r) => [r.west, r.east])
-  )
-
-  for (const lat of lats) {
-    for (const lng of lngs) {
-      if (!US_BOUNDS.some((region) => containsPoint(region, lat, lng))) {
-        return false
-      }
-    }
-  }
-  return true
-}
-
-/**
- * Clamps `bbox` so the result is entirely inside the US, or throws when there
- * is nothing to clamp to (a box over Europe has no US part to keep).
- *
- * A box already inside is returned unchanged. Otherwise two candidates are
- * considered and the larger wins:
- *
- *  1. the intersection with the single best-overlapping region, and
- *  2. the box with its latitudes pulled in to what *every* overlapping strip
- *     can accept, which preserves the full longitude span.
- *
- * (2) exists because (1) alone answers "a bbox from -96 to -94" by throwing
- * away half the longitude range, when pulling the north edge down by 1.2° is
- * both smaller a change and closer to what the caller asked for.
- */
-export function clampToUs(bbox: BBox): BBox {
-  assertValidBBox(bbox)
-  if (isWithinUs(bbox)) return bbox
-
-  const overlapping = US_BOUNDS.map((region) => ({
-    region,
-    overlap: intersectBBox(bbox, region),
-  })).filter(
-    (entry): entry is { region: BBox; overlap: BBox } =>
-      entry.overlap !== undefined
-  )
-
-  if (overlapping.length === 0) {
-    throw new Error(
-      `clampToUs: the bbox ${JSON.stringify(bbox)} does not overlap any US ` +
-        "region, so there is nothing to clamp it to. US-only bounding boxes " +
-        "are a hard invariant (spec §0.5): a box reaching into Canada puts " +
-        "this campaign under CASL, and into the EU/UK under GDPR + PECR."
-    )
-  }
-
-  let best = overlapping[0].overlap
-  for (const { overlap } of overlapping) {
-    if (bboxArea(overlap) > bboxArea(best)) best = overlap
-  }
-
-  // Candidate 2: keep the longitude span, tighten the latitudes to the
-  // strictest overlapping strip.
-  const south = Math.max(bbox.south, ...overlapping.map((e) => e.region.south))
-  const north = Math.min(bbox.north, ...overlapping.map((e) => e.region.north))
-  if (north > south) {
-    const widened: BBox = { south, north, west: bbox.west, east: bbox.east }
-    if (bboxArea(widened) > bboxArea(best) && isWithinUs(widened)) {
-      best = widened
-    }
-  }
-
-  return best
-}
-
-/**
- * Mean miles per degree of latitude. Exported so a caller (and the tests) can
- * check `bboxAround`'s span without re-deriving the constant.
- */
-export const MILES_PER_DEGREE_LATITUDE = 69.0547
-
-/**
- * Above this a single Overpass query stops being a search and becomes an
- * outage for everyone else on the instance.
- */
-export const MAX_RADIUS_MILES = 250
-
-/**
- * A radius search is not expressible in Overpass's bbox filter, so the radius
- * becomes the *circumscribing* box: the north-south span is exactly
- * `2 * radiusMiles`, and the east-west span is widened by `1/cos(lat)` so it
- * covers the same distance on the ground rather than the same number of
- * degrees.
- */
-export function bboxAround(
-  lat: number,
-  lng: number,
-  radiusMiles: number
-): BBox {
-  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
-    throw new Error(`bboxAround: latitude ${lat} is out of range`)
-  }
-  if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
-    throw new Error(`bboxAround: longitude ${lng} is out of range`)
-  }
-  if (!Number.isFinite(radiusMiles) || radiusMiles <= 0) {
-    throw new Error(
-      `bboxAround: radiusMiles must be positive (got ${radiusMiles})`
-    )
-  }
-  if (radiusMiles > MAX_RADIUS_MILES) {
-    // A 250-mile radius is already a 500-mile box and several minutes of
-    // Overpass time. Refusing beats issuing a query that will time out after
-    // consuming a large slice of shared capacity.
-    throw new Error(
-      `bboxAround: radiusMiles ${radiusMiles} exceeds ${MAX_RADIUS_MILES}. ` +
-        "Run several smaller searches instead — Overpass is donated capacity."
-    )
-  }
-
-  const latDelta = radiusMiles / MILES_PER_DEGREE_LATITUDE
-  // At high latitude cos() collapses and the longitude delta explodes; the
-  // floor keeps the divisor sane and the clamps below keep the box legal.
-  const cos = Math.max(Math.cos((lat * Math.PI) / 180), 0.01)
-  const lngDelta = radiusMiles / (MILES_PER_DEGREE_LATITUDE * cos)
-
-  return {
-    south: Math.max(-90, lat - latDelta),
-    north: Math.min(90, lat + latDelta),
-    west: Math.max(-180, lng - lngDelta),
-    east: Math.min(180, lng + lngDelta),
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +182,13 @@ export interface OsmCandidate {
   openingHours: string | null
   lat: number
   lng: number
+  /**
+   * Which country this business is in, or undefined where nothing on the
+   * element could say. `lib/leads.ts` resolves the undefined case — it is the
+   * one that decides which compliance regime a lead is emailed under, so it
+   * is not left to a module whose whole job is "return what OSM said".
+   */
+  country: Country | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -752,27 +440,24 @@ function tag(
   return null
 }
 
-const US_COUNTRY_VALUES = new Set([
-  "us",
-  "usa",
-  "united states",
-  "united states of america",
-])
-
 /**
- * `addr:country` set to anything other than the US.
+ * Where an element is, as far as its own tags and coordinates can say.
  *
- * Coverage of this tag is poor, so this can only ever remove a candidate that
- * a coarse bbox let through — it is not a substitute for `isWithinUs`. It
- * exists because the strips in `US_BOUNDS` cannot follow the border exactly
- * and a mis-set bbox should not be the only thing between us and CASL.
+ * `addr:country` coverage in OSM is thin, so this leans on `addr:state` (the
+ * province codes are disjoint from the state codes), then the postal code
+ * shape, then the coordinates. Undefined means genuinely unknown, which near
+ * the border is common and is why this cannot be the only guard.
  */
-function isTaggedNonUs(tags: OsmTags): boolean {
-  const raw = tags["addr:country"]
-  if (typeof raw !== "string") return false
-  const value = raw.trim().toLowerCase()
-  if (value.length === 0) return false
-  return !US_COUNTRY_VALUES.has(value)
+function elementCountry(
+  tags: OsmTags,
+  coords: { lat: number; lng: number } | undefined
+): Country | undefined {
+  return countryFromAddress({
+    country: tag(tags, ["addr:country"], 60),
+    state: tag(tags, ["addr:state", "addr:province"], 40),
+    postcode: tag(tags, ["addr:postcode"], 20),
+    ...(coords ?? {}),
+  })
 }
 
 function buildAddress(tags: OsmTags): string | null {
@@ -919,8 +604,12 @@ function elementCoords(
 export async function searchOverpass(
   bbox: BBox,
   types: readonly LeadType[],
+  countries: readonly Country[],
   deps?: OsmDeps
 ): Promise<OsmCandidate[]> {
+  if (countries.length === 0) {
+    throw new Error("searchOverpass: no countries were selected")
+  }
   const resolved = resolveDeps(deps)
   const query = buildOverpassQuery(bbox, types)
   const body = new URLSearchParams({ data: query }).toString()
@@ -961,7 +650,7 @@ export async function searchOverpass(
   const candidates: OsmCandidate[] = []
   const seen = new Set<string>()
   let unnamed = 0
-  let nonUs = 0
+  let outside = 0
 
   for (const element of elements) {
     const osmType = typeof element.type === "string" ? element.type : undefined
@@ -981,16 +670,22 @@ export async function searchOverpass(
       unnamed++
       continue
     }
-    if (isTaggedNonUs(tags)) {
-      nonUs++
-      continue
-    }
-
     const type = classifyElement(tags, types)
     if (!type) continue
 
     const coords = elementCoords(element)
     if (!coords) continue
+
+    // The bbox is already clamped to the selected countries, so this only
+    // catches what a rectangle cannot: an element the strips let through
+    // whose own tags place it somewhere we did not ask about. An unknown
+    // country is kept — near the border that is most of them, and dropping
+    // every unknown would empty out the searches that need this most.
+    const country = elementCountry(tags, coords)
+    if (country !== undefined && !countries.includes(country)) {
+      outside++
+      continue
+    }
 
     const osmId = `${osmType}/${osmNumericId}`
     if (seen.has(osmId)) continue
@@ -1007,6 +702,7 @@ export async function searchOverpass(
       openingHours: tag(tags, ["opening_hours"], 200),
       lat: coords.lat,
       lng: coords.lng,
+      country,
     })
   }
 
@@ -1016,8 +712,9 @@ export async function searchOverpass(
       types: [...types],
       elements: elements.length,
       candidates: candidates.length,
+      countries: [...countries],
       droppedUnnamed: unnamed,
-      droppedNonUs: nonUs,
+      droppedOutsideCountries: outside,
     },
   })
 
@@ -1033,6 +730,8 @@ export interface GeocodeResult {
   lng: number
   displayName: string
   bbox: BBox
+  /** From Nominatim's own address breakdown, so it is not a guess. */
+  country: Country | undefined
 }
 
 interface NominatimResult {
@@ -1040,6 +739,16 @@ interface NominatimResult {
   lon?: unknown
   display_name?: unknown
   boundingbox?: unknown
+  address?: unknown
+}
+
+/** Nominatim's `address.country_code` is lowercase ISO 3166-1 alpha-2. */
+function parseNominatimCountry(value: unknown): Country | undefined {
+  if (value === null || typeof value !== "object") return undefined
+  const code = (value as { country_code?: unknown }).country_code
+  if (typeof code !== "string") return undefined
+  const upper = code.trim().toUpperCase()
+  return upper === "US" || upper === "CA" ? upper : undefined
 }
 
 function parseNominatimBBox(value: unknown): BBox | undefined {
@@ -1053,20 +762,31 @@ function parseNominatimBBox(value: unknown): BBox | undefined {
 }
 
 /**
- * Geocodes a free-text place ("Columbus, OH", "43215") to a point and a box.
+ * Geocodes a free-text place ("Columbus, OH", "London, ON", "43215", "K1A
+ * 0B1") to a point, a box, and the country it landed in.
  *
- * `countrycodes=us` is not a nicety: without it "London" resolves to the UK,
- * and a UK bbox puts the campaign under GDPR + PECR (spec §0.5). Returns
- * `undefined` for no match, which is a normal outcome for a typo and not an
- * error worth throwing over.
+ * `countrycodes` is not a nicety: without it "London" resolves to England,
+ * and a UK bbox puts the campaign under GDPR and PECR. It is also what makes
+ * "London, ON" and "London, KY" resolvable at all — Nominatim picks between
+ * them, and it can only pick from what it is allowed to return.
+ *
+ * `addressdetails=1` costs nothing extra and buys the authoritative answer to
+ * "which country is this", which beats anything the bounding strips can say.
+ *
+ * Returns `undefined` for no match, which is a normal outcome for a typo and
+ * not an error worth throwing over.
  */
 export async function geocodePlace(
   query: string,
+  countries: readonly Country[],
   deps?: OsmDeps
 ): Promise<GeocodeResult | undefined> {
   const trimmed = query.trim()
   if (trimmed.length === 0) {
     throw new Error("geocodePlace: query is empty")
+  }
+  if (countries.length === 0) {
+    throw new Error("geocodePlace: no countries were selected")
   }
   const resolved = resolveDeps(deps)
 
@@ -1074,8 +794,8 @@ export async function geocodePlace(
     q: trimmed,
     format: "jsonv2",
     limit: "1",
-    countrycodes: "us",
-    addressdetails: "0",
+    countrycodes: countryCodesParam(countries),
+    addressdetails: "1",
   }).toString()}`
 
   const raw = await cachedRequest(
@@ -1124,5 +844,6 @@ export async function geocodePlace(
     lng,
     displayName: displayName.length > 0 ? displayName : trimmed,
     bbox,
+    country: parseNominatimCountry(first.address),
   }
 }

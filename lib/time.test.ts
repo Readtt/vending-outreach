@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
-  isUsFederalHoliday,
+  isPublicHoliday,
   isWithinSendWindow,
   localMidnightEpochMs,
   nextSendWindowStart,
@@ -38,19 +38,19 @@ test("isUsFederalHoliday: observed-date shift (New Year's Day 2023, a Sunday)", 
   const observedMonday = Date.UTC(2023, 0, 2, 17, 0, 0) // Jan 2 noon EST
   const actualSunday = Date.UTC(2023, 0, 1, 17, 0, 0) // Jan 1 noon EST
 
-  assert.strictEqual(isUsFederalHoliday(observedMonday, NY), true)
+  assert.strictEqual(isPublicHoliday(observedMonday, NY), true)
   // The actual Jan 1 is a Sunday, not the *observed* date, and Sundays are
   // already excluded elsewhere by the weekend rule — so this function
   // correctly reports it as not the (shifted) holiday date.
-  assert.strictEqual(isUsFederalHoliday(actualSunday, NY), false)
+  assert.strictEqual(isPublicHoliday(actualSunday, NY), false)
 })
 
 test("isUsFederalHoliday: direct date, no shift (Independence Day 2024, a Thursday)", () => {
   const july4 = Date.UTC(2024, 6, 4, 17, 0, 0) // Jul 4 2024, 13:00 EDT
-  assert.strictEqual(isUsFederalHoliday(july4, NY), true)
+  assert.strictEqual(isPublicHoliday(july4, NY), true)
 
   const july5 = Date.UTC(2024, 6, 5, 17, 0, 0)
-  assert.strictEqual(isUsFederalHoliday(july5, NY), false)
+  assert.strictEqual(isPublicHoliday(july5, NY), false)
 })
 
 test("isWithinSendWindow: hour and weekend rules (America/Chicago)", () => {
