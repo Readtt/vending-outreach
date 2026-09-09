@@ -17,16 +17,20 @@
  *  - `checkCircuitBreakers` — halt-everything conditions
  *
  * ---------------------------------------------------------------------------
- * DRY-RUN TRAP — read before switching SEND_ENABLED on
+ * DRY RUN
  * ---------------------------------------------------------------------------
  * A dry-run send writes an `.eml` and still records a `messages` row with
- * status='sent' (marked `{"dryRun":true}` in `error`). That is deliberate:
- * the dry run has to exercise the *real* idempotency and pacing paths, and
- * those are keyed off rows existing. The consequence is that
- * `UNIQUE(lead_id, sequence_step)` will block the real send of a step that
- * was already dry-run. Before going live, call `clearDryRunMessages()` (or
- * show `countDryRunMessages()` in the UI and make the user decide). Silently
- * skipping the first 200 leads is a worse failure than an explicit chore.
+ * status='sent', flagged by the `dry_run` column. That is deliberate: the dry
+ * run has to exercise the *real* idempotency and pacing paths, and those are
+ * keyed off rows existing.
+ *
+ * `ux_msg_step` excludes `dry_run = 1` rows (migration 3), so a dry run does
+ * NOT block the later real send of that step — dry-running the first 200
+ * leads used to burn them permanently. `countSentToday` still counts dry-run
+ * rows, so the daily cap and warm-up ramp are exercised faithfully.
+ *
+ * `clearDryRunMessages()` / `countDryRunMessages()` remain for tidying up
+ * before going live; they are now housekeeping, not a correctness chore.
  */
 
 import { createHash, randomUUID } from "node:crypto"
@@ -85,17 +89,19 @@ export const MAX_SEND_ATTEMPTS = 2
 
 /**
  * Bookkeeping kept in `messages.error`, which is a free TEXT column we own.
- * It lives here instead of in new columns because adding a migration to
- * `lib/db.ts` while other agents are also editing it risks two different
- * "migration 2"s and a divergent `user_version`, which is a corrupt-schema
- * class of bug.
+ * It lives here rather than in dedicated columns because it is per-attempt
+ * diagnostic detail with no schema of its own.
+ *
+ * Deliberately NOT here: dry-run state. That was once `{"dryRun":true}` in
+ * this record, which meant a real error string and a dry-run marker competed
+ * for the same column, and uniqueness could not key off it. It is the
+ * `messages.dry_run` column now (migration 3).
  */
 interface SendAttemptRecord {
   attempts: number
   step: number | null
   lastKind?: SmtpErrorKind
   lastDetail?: string
-  dryRun?: boolean
   bounce?: "hard" | "soft"
   bounceStatus?: string
 }
@@ -111,7 +117,6 @@ function readAttemptRecord(row: Pick<MessageRow, "error">): SendAttemptRecord {
         step: typeof record.step === "number" ? record.step : null,
         lastKind: record.lastKind,
         lastDetail: record.lastDetail,
-        dryRun: record.dryRun,
         bounce: record.bounce,
         bounceStatus: record.bounceStatus,
       }
@@ -1947,11 +1952,16 @@ type ClaimResult =
  * The UNIQUE index is what structurally prevents double-sending, so the INSERT
  * is allowed to throw and the violation is interpreted rather than avoided by
  * a pre-check (a pre-check races; an index does not).
+ *
+ * `dryRun` is decided by the caller from the transport it has already chosen,
+ * because it is written on this row and the row exists before the transport is
+ * used. It must never be inferred afterwards.
  */
 function claimSendSlot(
   input: SendMessageInput,
   now: number,
-  outreachId: string
+  outreachId: string,
+  dryRun: boolean
 ): ClaimResult {
   const db = getDb()
   const normalizedTo = normalizeEmail(input.to)
@@ -1993,8 +2003,8 @@ function claimSendSlot(
       db.prepare(
         `INSERT INTO messages
            (id, lead_id, mailbox_id, direction, sequence_step, subject, body,
-            outreach_id, status, error, sent_at, created_at)
-         VALUES (?, ?, ?, 'out', ?, ?, ?, ?, 'sending', ?, NULL, ?)`
+            outreach_id, status, error, sent_at, created_at, dry_run)
+         VALUES (?, ?, ?, 'out', ?, ?, ?, ?, 'sending', ?, NULL, ?, ?)`
       ).run(
         rowId,
         input.leadId,
@@ -2007,7 +2017,8 @@ function claimSendSlot(
           attempts: 1,
           step: input.sequenceStep,
         } satisfies SendAttemptRecord),
-        now
+        now,
+        dryRun ? 1 : 0
       )
       db.exec("COMMIT")
       return { kind: "claimed", row: { rowId, outreachId, attempts: 1 } }
@@ -2026,10 +2037,16 @@ function claimSendSlot(
                 `SELECT * FROM messages WHERE outreach_id = ? AND direction = 'out' LIMIT 1`
               )
               .get(outreachId)
-          : db
+          : // Scoped to `dry_run = 0` because that is the only set of rows
+            // `ux_msg_step` constrains. A lead can legitimately hold both a
+            // dry-run and a real row for one step, and an unscoped LIMIT 1
+            // would report whichever the planner reached first — possibly the
+            // dry-run row, which is not what the index fired on.
+            db
               .prepare(
                 `SELECT * FROM messages
-                 WHERE lead_id = ? AND sequence_step = ? AND direction = 'out' LIMIT 1`
+                 WHERE lead_id = ? AND sequence_step = ? AND direction = 'out'
+                   AND dry_run = 0 LIMIT 1`
               )
               .get(input.leadId, input.sequenceStep)
       ) as MessageRow | undefined
@@ -2085,9 +2102,14 @@ function claimSendSlot(
       // deliver despite being classified "not sent", reconciliation can still
       // find that copy under the same header and surface the mistake.
       const attempts = record.attempts + 1
+      // `dry_run` is re-stamped: the takeover attempt may be running under a
+      // different transport than the one that wrote the row (SEND_ENABLED
+      // flipped, or the STOP file appeared between attempts), and the column
+      // has to describe the attempt that is about to happen.
       db.prepare(
         `UPDATE messages
-         SET status = 'sending', subject = ?, body = ?, error = ?, sent_at = NULL
+         SET status = 'sending', subject = ?, body = ?, error = ?, sent_at = NULL,
+             dry_run = ?
          WHERE id = ?`
       ).run(
         input.subject,
@@ -2097,6 +2119,7 @@ function claimSendSlot(
           attempts,
           step: input.sequenceStep,
         } satisfies SendAttemptRecord),
+        dryRun ? 1 : 0,
         existing.id
       )
       db.exec("COMMIT")
@@ -2224,9 +2247,29 @@ export async function sendMessage(
       ? outreachIdForDedupeKey(input.dedupeKey)
       : randomUUID()
 
+  // The transport is chosen BEFORE the row is claimed, because `dry_run` is a
+  // column on that row and has to be correct at insert time. Inferring it
+  // after the send is what put `{"dryRun":true}` into `error` and left the
+  // uniqueness index unable to tell a dry run from a real one.
+  //
+  // Choosing a transport opens nothing — nodemailer dials on the first
+  // `sendMail`, and this module never pools — so spec §5's "insert the row
+  // before opening SMTP" ordering is intact.
+  const transport = deps.transport ?? createTransport(mailbox)
+  const dryRun = transport.kind === "file"
+  const ownsTransport = deps.transport === undefined
+  const releaseTransport = async (): Promise<void> => {
+    if (ownsTransport) {
+      await transport.close().catch(() => {
+        /* closing a transport must never mask the send outcome */
+      })
+    }
+  }
+
   // Steps 2 + 3.
-  const claim = claimSendSlot(input, startedAt, outreachId)
+  const claim = claimSendSlot(input, startedAt, outreachId, dryRun)
   if (claim.kind === "suppressed") {
+    await releaseTransport()
     logEvent("send.suppressed_at_send", {
       leadId: input.leadId,
       detail: { reason: claim.reason },
@@ -2234,6 +2277,7 @@ export async function sendMessage(
     return { status: "suppressed", reason: claim.reason }
   }
   if (claim.kind === "duplicate") {
+    await releaseTransport()
     logEvent("send.duplicate", {
       leadId: input.leadId,
       detail: { reason: claim.reason, step: input.sequenceStep },
@@ -2241,6 +2285,7 @@ export async function sendMessage(
     return { status: "duplicate", reason: claim.reason, rowId: claim.rowId }
   }
   if (claim.kind === "blocked") {
+    await releaseTransport()
     logEvent("send.blocked", {
       leadId: input.leadId,
       detail: { code: claim.code, reason: claim.reason },
@@ -2270,10 +2315,6 @@ export async function sendMessage(
     references: input.references,
   })
 
-  const transport = deps.transport ?? createTransport(mailbox)
-  const dryRun = transport.kind === "file"
-  const ownsTransport = deps.transport === undefined
-
   // Step 5.
   try {
     const result = await transport.send(message)
@@ -2293,7 +2334,6 @@ export async function sendMessage(
         JSON.stringify({
           attempts,
           step: input.sequenceStep,
-          ...(dryRun ? { dryRun: true } : {}),
         } satisfies SendAttemptRecord),
         rowId
       )
@@ -2487,11 +2527,7 @@ export async function sendMessage(
       unresolved: classification.requiresReconciliation,
     }
   } finally {
-    if (ownsTransport) {
-      await transport.close().catch(() => {
-        /* closing a transport must never mask the send outcome */
-      })
-    }
+    await releaseTransport()
   }
 }
 
@@ -2534,21 +2570,25 @@ export function countDryRunMessages(): number {
   const row = getDb()
     .prepare(
       `SELECT count(*) AS n FROM messages
-       WHERE direction = 'out' AND error LIKE '%"dryRun":true%'`
+       WHERE direction = 'out' AND dry_run = 1`
     )
     .get() as { n: number | bigint }
   return Number(row.n)
 }
 
 /**
- * Deletes dry-run rows so the real send of those steps is not blocked by
- * `UNIQUE(lead_id, sequence_step)`. See the DRY-RUN TRAP note at the top.
+ * Deletes dry-run rows.
+ *
+ * No longer required for correctness — `ux_msg_step` skips them, so a real
+ * send of a dry-run step goes through either way (migration 3). It is now for
+ * tidying up: dry-run rows are counted by `countSentToday`, so leaving a large
+ * rehearsal behind eats into the first real day's cap.
  */
 export function clearDryRunMessages(): number {
   const result = getDb()
     .prepare(
       `DELETE FROM messages
-       WHERE direction = 'out' AND error LIKE '%"dryRun":true%'`
+       WHERE direction = 'out' AND dry_run = 1`
     )
     .run()
   const n = Number(result.changes)

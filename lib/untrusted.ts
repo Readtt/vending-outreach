@@ -66,14 +66,22 @@ const FORMAT_CHARS = /\p{Cf}/gu
  * characters, every new zero-width codepoint Unicode adds, and every private
  * use area; it would miss at least one. This inverts the burden.
  *
- * Known consequence: `\p{S}` (math/currency/modifier/other symbols) is NOT
- * kept, so `$`, `+`, `=`, `<`, `>`, `|`, `~`, `^`, backtick, currency signs and
- * emoji are dropped. That loses "$500" -> "500" and "+1 614..." -> "1 614...".
- * That is the spec's explicit trade and it also helps: dropped characters are
- * deleted, not replaced, so "un<>subscribe" collapses to "unsubscribe" and
- * still trips the opt-out regex instead of evading it.
+ * `\p{S}` (math/currency/modifier/other symbols) is NOT kept, with four
+ * hand-picked exceptions: `$ + % =` (amendment A6). Those four ride along in
+ * prices and phone numbers — "$500" became "500" and "+1 614-555-0100" became
+ * "1 614-555-0100" — and a personalization fact or call script carrying a
+ * mangled price is visible to the recipient. (`%` is already `\p{P}`; it is
+ * listed anyway so the intent of the set is readable.)
+ *
+ * Everything else in `\p{S}` still goes, and two groups matter:
+ *   - `<` `>` — the shape of an HTML tag and of a fence delimiter. Dropping
+ *     them is also why "un<>subscribe" collapses to "unsubscribe" and trips
+ *     the opt-out regex instead of evading it (characters are deleted, not
+ *     replaced).
+ *   - emoji and every other pictograph, which have no business in text a
+ *     model is about to reason over.
  */
-const NOT_WHITELISTED = /[^\p{L}\p{N}\p{P}\p{Zs}\n\t]/gu
+const NOT_WHITELISTED = /[^\p{L}\p{N}\p{P}\p{Zs}$+%=\n\t]/gu
 
 /** Horizontal whitespace: tab plus every Unicode space separator. */
 const HORIZONTAL_WS = /[\t\p{Zs}]+/gu

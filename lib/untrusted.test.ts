@@ -196,6 +196,34 @@ test("sanitize: control characters and non-whitelisted symbols are dropped", () 
   assert.equal(result.text, "Hot coffee here 100% off")
 })
 
+test("sanitize: prices and phone numbers survive intact (amendment A6)", () => {
+  // These reach a recipient inside a personalization fact or a call script.
+  // The whitelist used to eat the symbol and leave "500" / "1 614-555-0100",
+  // which is a visible mangling of the user's own outgoing text.
+  assert.equal(sanitize("$500").text, "$500")
+  assert.equal(sanitize("+1 614-555-0100").text, "+1 614-555-0100")
+  assert.equal(
+    sanitize("Lunch specials $8.50 + tax, 20% off").text,
+    "Lunch specials $8.50 + tax, 20% off"
+  )
+  assert.equal(sanitize("net = 40 machines").text, "net = 40 machines")
+})
+
+test("sanitize: A6 did not open the whitelist to tags or emoji", () => {
+  // `<` and `>` are the shape of an HTML tag and of the fence delimiter, which
+  // is why A6 adds four named characters and not all of \p{S}.
+  assert.equal(
+    sanitize("<script>alert(1)</script>").text,
+    "scriptalert(1)/script"
+  )
+  assert.equal(
+    sanitize("Great coffee 😀 and pastries 🥐").text,
+    "Great coffee and pastries"
+  )
+  // The rest of \p{S} still goes: other currencies, arrows, math operators.
+  assert.equal(sanitize("€50 → £40 × 2").text, "50 40 2")
+})
+
 test("sanitize: whitespace runs collapse and the cap reports truncation", () => {
   const collapsed = sanitize("a   \t  b\n\n\n\n\nc")
   assert.equal(collapsed.text, "a b\n\nc")

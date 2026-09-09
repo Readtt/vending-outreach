@@ -198,6 +198,27 @@ const migrations: Migration[] = [
       CREATE INDEX ix_http_cache_kind ON http_cache(kind);
     `)
   },
+  // Migration 3: mark dry-run sends structurally instead of by a marker
+  // stuffed into `error`, and take them out of the uniqueness guarantee.
+  //
+  // `ux_msg_step` (spec §0.4) is what stops a lead receiving the same sequence
+  // step twice. A dry run also writes a row, so under the old index every lead
+  // that was dry-run was permanently blocked from ever receiving that real
+  // email — dry-running the first 200 leads silently burned them.
+  //
+  // The rebuilt index only constrains real sends. `countSentToday` still
+  // counts dry-run rows on purpose (spec §7): the dry run has to exercise the
+  // daily cap and the warm-up ramp faithfully. Only uniqueness changes.
+  (db) => {
+    db.exec(`
+      ALTER TABLE messages ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0;
+
+      DROP INDEX ux_msg_step;
+
+      CREATE UNIQUE INDEX ux_msg_step ON messages(lead_id, sequence_step)
+        WHERE direction = 'out' AND sequence_step IS NOT NULL AND dry_run = 0;
+    `)
+  },
 ]
 
 function migrate(db: DatabaseSync): void {
@@ -272,18 +293,29 @@ export function closeDb(): void {
 
 export type ProviderKind = "anthropic" | "google" | "openai_compatible"
 
-export type LeadStatus =
-  | "new"
-  | "enriching"
-  | "ready"
-  | "held"
-  | "contacted"
-  | "replied"
-  | "hot"
-  | "won"
-  | "dead"
-  | "unqualified"
-  | "suppressed"
+/**
+ * Every `leads.status`, in one runtime list so `countLeadsByStatus` can
+ * zero-fill without a second copy of the vocabulary drifting from the type.
+ *
+ * The CHECK constraint in migration 1 is a third copy, unavoidably: it is
+ * frozen into a shipped migration and cannot be derived from here. Adding a
+ * status means a new migration, not an edit to this array alone.
+ */
+export const LEAD_STATUSES = [
+  "new",
+  "enriching",
+  "ready",
+  "held",
+  "contacted",
+  "replied",
+  "hot",
+  "won",
+  "dead",
+  "unqualified",
+  "suppressed",
+] as const
+
+export type LeadStatus = (typeof LEAD_STATUSES)[number]
 
 export type MessageDirection = "in" | "out"
 
@@ -354,6 +386,12 @@ export interface MessageRow {
   error: string | null
   sent_at: number | null
   created_at: number | null
+  /**
+   * 1 when the send went to `FileTransport` (an `.eml` on disk, nothing on the
+   * wire). Excluded from `ux_msg_step` so a dry run cannot block the real
+   * send of that step; still counted by `countSentToday`.
+   */
+  dry_run: number
 }
 
 export interface TaskRow {
@@ -538,6 +576,42 @@ export function enqueue(kind: string, options: EnqueueOptions = {}): string {
   )
 
   return id
+}
+
+/**
+ * Cancels pending tasks for a lead, so a "not interested" arriving at 9:02 can
+ * kill a follow-up due at 9:05 (spec §7, TOCTOU). Call inside the same
+ * transaction as the suppression write. Pass `kinds` to limit it; omit to
+ * cancel all pending tasks for the lead. Sets status='cancelled'. Returns the
+ * number cancelled.
+ *
+ * Only `pending` rows move. A `running` task is mid-flight and owned by a
+ * worker — the send path re-checks suppression inside its own transaction, so
+ * that is where an in-flight send is stopped, not here.
+ *
+ * Deliberately opens no transaction of its own: it is meant to join the
+ * caller's `BEGIN IMMEDIATE`, and a nested BEGIN would throw.
+ */
+export function cancelPendingTasksForLead(
+  leadId: string,
+  kinds?: readonly string[]
+): number {
+  // An explicit empty list means "cancel none of the kinds I named". Falling
+  // through to the unfiltered UPDATE would cancel everything instead — the
+  // exact opposite, and silent.
+  if (kinds !== undefined && kinds.length === 0) return 0
+
+  const db = getDb()
+  const params: string[] = [leadId]
+  let sql = `UPDATE tasks SET status = 'cancelled'
+             WHERE lead_id = ? AND status = 'pending'`
+
+  if (kinds !== undefined) {
+    sql += ` AND kind IN (${kinds.map(() => "?").join(", ")})`
+    params.push(...kinds)
+  }
+
+  return toNumber(db.prepare(sql).run(...params).changes)
 }
 
 /**
@@ -771,8 +845,7 @@ export function listProviders(): ProviderRow[] {
 export function getProviderById(id: string): ProviderRow | undefined {
   const db = getDb()
   return db.prepare(`SELECT * FROM providers WHERE id = ?`).get(id) as
-    | ProviderRow
-    | undefined
+    ProviderRow | undefined
 }
 
 /**
@@ -805,7 +878,9 @@ export function upsertProvider(input: UpsertProviderInput): ProviderRow {
 
   const row = getProviderById(id)
   if (!row) {
-    throw new Error(`upsertProvider: row "${id}" missing immediately after write.`)
+    throw new Error(
+      `upsertProvider: row "${id}" missing immediately after write.`
+    )
   }
   return row
 }
@@ -839,8 +914,7 @@ export function listMailboxes(): MailboxRow[] {
 export function getMailboxById(id: string): MailboxRow | undefined {
   const db = getDb()
   return db.prepare(`SELECT * FROM mailboxes WHERE id = ?`).get(id) as
-    | MailboxRow
-    | undefined
+    MailboxRow | undefined
 }
 
 export function upsertMailbox(input: UpsertMailboxInput): MailboxRow {
@@ -855,17 +929,13 @@ export function upsertMailbox(input: UpsertMailboxInput): MailboxRow {
        email = excluded.email,
        daily_cap = excluded.daily_cap,
        app_password = COALESCE(excluded.app_password, mailboxes.app_password)`
-  ).run(
-    id,
-    input.email,
-    input.appPassword ?? null,
-    input.dailyCap ?? 25,
-    now
-  )
+  ).run(id, input.email, input.appPassword ?? null, input.dailyCap ?? 25, now)
 
   const row = getMailboxById(id)
   if (!row) {
-    throw new Error(`upsertMailbox: row "${id}" missing immediately after write.`)
+    throw new Error(
+      `upsertMailbox: row "${id}" missing immediately after write.`
+    )
   }
   return row
 }
@@ -873,4 +943,288 @@ export function upsertMailbox(input: UpsertMailboxInput): MailboxRow {
 export function deleteMailbox(id: string): void {
   const db = getDb()
   db.prepare(`DELETE FROM mailboxes WHERE id = ?`).run(id)
+}
+
+// ---------------------------------------------------------------------------
+// Leads
+// ---------------------------------------------------------------------------
+
+export interface InsertLeadInput {
+  name: string
+  type: string
+  address?: string | null
+  phone?: string | null
+  website?: string | null
+  lat?: number | null
+  lng?: number | null
+  timezone?: string | null
+  source: string
+  /** Stable OSM identity, e.g. "node/1234567". Used for dedupe. */
+  osmId?: string | null
+}
+
+/**
+ * Inserts a lead with status 'new'. `osm_id` is UNIQUE — if a lead with that
+ * osm_id already exists, insert nothing and return the existing row. This is
+ * how re-running an Overpass search over an overlapping bbox stays idempotent.
+ *
+ * The existing row is returned untouched, not merged with `input`: a lead that
+ * has since been enriched, emailed, or suppressed must not be reset by a
+ * re-scrape of the same OSM node.
+ */
+export function insertLead(input: InsertLeadInput): LeadRow {
+  const db = getDb()
+  const osmId = input.osmId ?? null
+  const id = randomUUID()
+
+  // One statement rather than a SELECT-then-INSERT: the conflict is resolved
+  // by the unique index, which cannot race, where a pre-check can.
+  db.prepare(
+    `INSERT INTO leads (id, name, type, address, phone, website, lat, lng,
+                        timezone, status, score, source, osm_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, ?, ?, ?)
+     ON CONFLICT(osm_id) DO NOTHING`
+  ).run(
+    id,
+    input.name,
+    input.type,
+    input.address ?? null,
+    input.phone ?? null,
+    input.website ?? null,
+    input.lat ?? null,
+    input.lng ?? null,
+    input.timezone ?? null,
+    input.source,
+    osmId,
+    Date.now()
+  )
+
+  // With an osm_id, that column identifies the winner whether the insert
+  // happened or was skipped. Without one, no conflict was possible (SQLite
+  // treats every NULL as distinct), so the new row is ours by id.
+  const row = (
+    osmId !== null
+      ? db.prepare(`SELECT * FROM leads WHERE osm_id = ?`).get(osmId)
+      : db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id)
+  ) as LeadRow | undefined
+
+  if (!row) {
+    throw new Error("insertLead: row missing immediately after write.")
+  }
+  return row
+}
+
+export function getLeadById(id: string): LeadRow | undefined {
+  const db = getDb()
+  return db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id) as
+    LeadRow | undefined
+}
+
+export interface ListLeadsFilter {
+  status?: LeadStatus | LeadStatus[]
+  /** Case-insensitive substring match against name and address. */
+  search?: string
+  /** Only leads that have a non-null, non-empty email. */
+  hasEmail?: boolean
+  limit?: number
+  offset?: number
+  /** Default "created_at DESC". */
+  orderBy?: "created_at DESC" | "created_at ASC" | "score DESC"
+}
+
+export type LeadOrderBy = NonNullable<ListLeadsFilter["orderBy"]>
+
+/**
+ * The only orderings that can reach SQL, resolved through a lookup so a
+ * caller-supplied string is never interpolated.
+ *
+ * Every one carries `id` as a final tiebreaker. `created_at` is epoch-ms and a
+ * bulk Overpass import writes hundreds of leads inside the same millisecond;
+ * without a unique tiebreaker, LIMIT/OFFSET paging over them silently repeats
+ * and skips rows.
+ */
+const LEAD_ORDER_BY: Readonly<Record<LeadOrderBy, string>> = {
+  "created_at DESC": "created_at DESC, id DESC",
+  "created_at ASC": "created_at ASC, id ASC",
+  "score DESC": "score DESC, created_at DESC, id DESC",
+}
+
+/** Neutralizes LIKE wildcards in a user-typed search term. */
+function escapeLikeTerm(term: string): string {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`)
+}
+
+interface LeadWhere {
+  sql: string
+  params: (string | number)[]
+}
+
+function buildLeadWhere(filter: ListLeadsFilter): LeadWhere {
+  const clauses: string[] = []
+  const params: (string | number)[] = []
+
+  if (filter.status !== undefined) {
+    const statuses = Array.isArray(filter.status)
+      ? filter.status
+      : [filter.status]
+    if (statuses.length === 0) {
+      // "None of these statuses" matches nothing. Dropping the clause would
+      // return every lead — a filter doing the opposite of what it says.
+      clauses.push("0")
+    } else {
+      clauses.push(`status IN (${statuses.map(() => "?").join(", ")})`)
+      params.push(...statuses)
+    }
+  }
+
+  const search = filter.search?.trim()
+  if (search) {
+    // SQLite's LIKE is already case-insensitive for ASCII. The ESCAPE clause
+    // stops a literal % or _ in a business name ("100% Coffee") from being
+    // read as a wildcard.
+    const needle = `%${escapeLikeTerm(search)}%`
+    clauses.push(`(name LIKE ? ESCAPE '\\' OR address LIKE ? ESCAPE '\\')`)
+    params.push(needle, needle)
+  }
+
+  if (filter.hasEmail === true) {
+    clauses.push(`(email IS NOT NULL AND email <> '')`)
+  } else if (filter.hasEmail === false) {
+    clauses.push(`(email IS NULL OR email = '')`)
+  }
+
+  return {
+    sql: clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "",
+    params,
+  }
+}
+
+export function listLeads(filter: ListLeadsFilter = {}): LeadRow[] {
+  const db = getDb()
+  const where = buildLeadWhere(filter)
+  const order = LEAD_ORDER_BY[filter.orderBy ?? "created_at DESC"]
+
+  let sql = `SELECT * FROM leads${where.sql} ORDER BY ${order}`
+  const params = [...where.params]
+
+  if (filter.limit !== undefined || filter.offset !== undefined) {
+    // SQLite has no bare OFFSET; -1 is its spelling of "no limit".
+    sql += ` LIMIT ? OFFSET ?`
+    params.push(
+      filter.limit === undefined ? -1 : Math.max(0, Math.trunc(filter.limit)),
+      filter.offset === undefined ? 0 : Math.max(0, Math.trunc(filter.offset))
+    )
+  }
+
+  return db.prepare(sql).all(...params) as unknown as LeadRow[]
+}
+
+/** How many leads match `filter`. `limit` and `offset` are ignored. */
+export function countLeads(filter: ListLeadsFilter = {}): number {
+  const db = getDb()
+  const where = buildLeadWhere(filter)
+  const row = db
+    .prepare(`SELECT count(*) AS n FROM leads${where.sql}`)
+    .get(...where.params) as { n: number | bigint }
+  return toNumber(row.n)
+}
+
+/** Per-status counts. Every LeadStatus is present, zero-filled. */
+export function countLeadsByStatus(): Record<LeadStatus, number> {
+  const db = getDb()
+  const counts = Object.fromEntries(
+    LEAD_STATUSES.map((status) => [status, 0])
+  ) as Record<LeadStatus, number>
+
+  const rows = db
+    .prepare(`SELECT status, count(*) AS n FROM leads GROUP BY status`)
+    .all() as unknown as { status: LeadStatus; n: number | bigint }[]
+
+  for (const row of rows) {
+    // A status outside the vocabulary cannot exist (migration 1 CHECKs it),
+    // but a hand-edited database is not worth crashing the dashboard over.
+    if (row.status in counts) counts[row.status] = toNumber(row.n)
+  }
+  return counts
+}
+
+/**
+ * Columns `updateLead` may write, as a hardcoded allowlist. This is the only
+ * thing standing between a caller-supplied object key and the SET clause;
+ * nothing outside this array can reach SQL.
+ */
+export const UPDATABLE_LEAD_COLUMNS = [
+  "name",
+  "type",
+  "address",
+  "phone",
+  "website",
+  "lat",
+  "lng",
+  "timezone",
+  "email",
+  "contact_name",
+  "status",
+  "score",
+  "research_json",
+  "personalization_fact",
+  "fact_category",
+] as const
+
+export type UpdatableLeadColumn = (typeof UPDATABLE_LEAD_COLUMNS)[number]
+
+export type LeadPatch = Partial<Pick<LeadRow, UpdatableLeadColumn>>
+
+/**
+ * Partial update. Only the provided keys are written. Returns the updated row.
+ * Throws if `id` does not exist.
+ *
+ * An unknown key throws rather than being skipped: a typo like `{ emial }`
+ * that silently succeeds is a fact the caller believes it saved and did not.
+ * A key set to `undefined` is treated as absent — write an explicit `null` to
+ * clear a column.
+ *
+ * An empty patch is a no-op that returns the current row.
+ */
+export function updateLead(id: string, patch: LeadPatch): LeadRow {
+  const db = getDb()
+
+  const existing = getLeadById(id)
+  if (!existing) {
+    throw new Error(`updateLead: lead "${id}" does not exist`)
+  }
+
+  for (const key of Object.keys(patch)) {
+    if (!(UPDATABLE_LEAD_COLUMNS as readonly string[]).includes(key)) {
+      throw new Error(
+        `updateLead: "${key}" is not an updatable lead column. ` +
+          `Allowed: ${UPDATABLE_LEAD_COLUMNS.join(", ")}.`
+      )
+    }
+  }
+
+  const assignments: string[] = []
+  const params: (string | number | null)[] = []
+
+  // Driven by the allowlist, not by the patch's keys, so the column names in
+  // the SQL are literals from this module even if the check above ever moves.
+  for (const column of UPDATABLE_LEAD_COLUMNS) {
+    const value = patch[column]
+    if (value === undefined) continue
+    assignments.push(`${column} = ?`)
+    params.push(value)
+  }
+
+  if (assignments.length === 0) return existing
+
+  params.push(id)
+  db.prepare(`UPDATE leads SET ${assignments.join(", ")} WHERE id = ?`).run(
+    ...params
+  )
+
+  const row = getLeadById(id)
+  if (!row) {
+    throw new Error(`updateLead: row "${id}" missing immediately after write.`)
+  }
+  return row
 }

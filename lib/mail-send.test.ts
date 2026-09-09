@@ -30,6 +30,8 @@ import {
   canSendNow,
   checkCircuitBreakers,
   classifySmtpError,
+  clearDryRunMessages,
+  countDryRunMessages,
   createTransport,
   FileTransport,
   getCircuitBreakerState,
@@ -42,6 +44,7 @@ import {
   type PacingConfig,
   type SentMailHit,
   type SentMailSearcher,
+  type Transport,
 } from "./mail-send.ts"
 import { getDb, getMailboxById, upsertMailbox, type MailboxRow } from "./db.ts"
 
@@ -114,6 +117,24 @@ function resetGlobalState(): void {
 
 function fileTransport(): FileTransport {
   return new FileTransport(path.join(TMP_ROOT, "outbox", randomUUID()))
+}
+
+/**
+ * A transport that reports `kind: "smtp"`, so the row it produces is a real
+ * send (`dry_run = 0`), while still only writing an `.eml` to disk.
+ *
+ * `SmtpTransport` is never constructed here — that would open a socket and
+ * break this file's invariant. But every dry-run rule keys off `kind`, so
+ * testing them at all needs something that claims to be live and dials
+ * nothing.
+ */
+function liveTransport(): Transport {
+  const file = fileTransport()
+  return {
+    kind: "smtp",
+    send: (message) => file.send(message),
+    close: () => file.close(),
+  }
 }
 
 function fakeSearcher(hit: SentMailHit | null): SentMailSearcher {
@@ -552,15 +573,24 @@ test("a send writes an .eml, records sent_at, and carries the required headers",
 
   const row = getDb()
     .prepare(`SELECT * FROM messages WHERE id = ?`)
-    .get(outcome.rowId) as { status: string; sent_at: number; error: string }
+    .get(outcome.rowId) as {
+    status: string
+    sent_at: number
+    error: string
+    dry_run: number
+  }
   assert.equal(row.status, "sent")
   assert.equal(row.sent_at, NOW)
-  assert.match(row.error, /"dryRun":true/)
+  // The dry run is recorded in its own column, not smuggled into `error`.
+  // `error` is for real errors; overloading it is what made the uniqueness
+  // index unable to tell a rehearsal from a real send.
+  assert.equal(row.dry_run, 1)
+  assert.doesNotMatch(row.error, /dryRun/)
 
   getDb().exec("DELETE FROM messages")
 })
 
-test("the unique index makes a second send of the same step a no-op", async () => {
+test("the unique index makes a second real send of the same step a no-op", async () => {
   resetGlobalState()
   const mailbox = seedMailbox()
   const lead = seedLead()
@@ -574,7 +604,7 @@ test("the unique index makes a second send of the same step a no-op", async () =
     sequenceStep: 1,
     leadTimezone: TZ,
   }
-  const deps = { transport: fileTransport(), now: () => NOW, pacing: NO_GAP }
+  const deps = { transport: liveTransport(), now: () => NOW, pacing: NO_GAP }
 
   const first = await sendMessage(input, deps)
   assert.equal(first.status, "sent")
@@ -596,6 +626,162 @@ test("the unique index makes a second send of the same step a no-op", async () =
   assert.equal(Number(count.n), 1)
 
   getDb().exec("DELETE FROM messages")
+})
+
+test("a dry run does not consume the real send of that step", async () => {
+  // The bug this proves gone: `ux_msg_step` used to cover dry-run rows, so
+  // rehearsing a step permanently blocked the real email for that lead.
+  // Dry-running the first 200 leads silently burned all 200.
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "Vending machines for your break room",
+    text: "Hi — quick question about your break room.",
+    sequenceStep: 1,
+    leadTimezone: TZ,
+  }
+
+  const rehearsal = await sendMessage(input, {
+    transport: fileTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(rehearsal.status, "sent")
+  if (rehearsal.status !== "sent") return
+  assert.equal(rehearsal.dryRun, true)
+
+  const real = await sendMessage(input, {
+    transport: liveTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(real.status, "sent")
+  if (real.status !== "sent") return
+  assert.equal(real.dryRun, false)
+  assert.notEqual(real.rowId, rehearsal.rowId)
+
+  const rows = getDb()
+    .prepare(
+      `SELECT dry_run FROM messages WHERE lead_id = ? AND direction = 'out'
+       ORDER BY dry_run DESC`
+    )
+    .all(lead.id) as unknown as { dry_run: number }[]
+  assert.deepEqual(
+    rows.map((row) => row.dry_run),
+    [1, 0]
+  )
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
+})
+
+test("a real send is still blocked once a real send of that step exists", async () => {
+  // The other half of the same index: excluding dry runs must not have
+  // loosened the guarantee for the sends that actually reach a stranger.
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "Vending machines for your break room",
+    text: "Hi — quick question about your break room.",
+    sequenceStep: 2,
+    leadTimezone: TZ,
+  }
+
+  assert.equal(
+    (
+      await sendMessage(input, {
+        transport: fileTransport(),
+        now: () => NOW,
+        pacing: NO_GAP,
+      })
+    ).status,
+    "sent"
+  )
+  assert.equal(
+    (
+      await sendMessage(input, {
+        transport: liveTransport(),
+        now: () => NOW,
+        pacing: NO_GAP,
+      })
+    ).status,
+    "sent"
+  )
+
+  // A dry-run row and a real row now both sit on (lead, step 2). The duplicate
+  // lookup must find the real one — it is the row the index fired on — and
+  // report it as already sent rather than picking the rehearsal.
+  const third = await sendMessage(input, {
+    transport: liveTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(third.status, "duplicate")
+  if (third.status !== "duplicate") return
+  assert.match(third.reason, /already sent/)
+
+  const real = getDb()
+    .prepare(
+      `SELECT id FROM messages
+       WHERE lead_id = ? AND sequence_step = 2 AND dry_run = 0`
+    )
+    .get(lead.id) as { id: string }
+  assert.equal(third.rowId, real.id)
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
+})
+
+test("two dry runs of the same step do NOT collide — a known fidelity gap", async () => {
+  // Documenting a consequence of the index, not endorsing it. Because
+  // `ux_msg_step` skips `dry_run = 1` entirely, dry runs no longer dedupe
+  // against each other, so rehearsing the same step twice writes two rows and
+  // consumes two slots of the derived daily count. Nothing is sent either way.
+  //
+  // If a future migration adds a matching `WHERE ... dry_run = 1` index to
+  // restore that, this test is the one that will tell you.
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "Vending machines for your break room",
+    text: "Hi — quick question about your break room.",
+    sequenceStep: 3,
+    leadTimezone: TZ,
+  }
+  const deps = { transport: fileTransport(), now: () => NOW, pacing: NO_GAP }
+
+  assert.equal((await sendMessage(input, deps)).status, "sent")
+  assert.equal((await sendMessage(input, deps)).status, "sent")
+
+  const count = getDb()
+    .prepare(
+      `SELECT count(*) AS n FROM messages WHERE lead_id = ? AND dry_run = 1`
+    )
+    .get(lead.id) as { n: number }
+  assert.equal(Number(count.n), 2)
+  assert.equal(countDryRunMessages(), 2)
+
+  // The tidy-up path keys off the column now, not a substring of `error`.
+  assert.equal(clearDryRunMessages(), 2)
+  assert.equal(countDryRunMessages(), 0)
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
 })
 
 test("an off-sequence send without a dedupe key is refused outright", async () => {
@@ -794,7 +980,10 @@ test("reconcile: absent from Sent Mail permits exactly one resend", async () => 
   assert.equal(afterReconcile.status, "retryable")
 
   // The retry takes the SAME row over rather than inserting a second one, so
-  // the (lead, step) pair still holds exactly one message.
+  // the (lead, step) pair still holds exactly one message. It runs on a live
+  // transport because the attempt being retried was a real one — `ux_msg_step`
+  // only covers `dry_run = 0`, so a dry run would sidestep the takeover
+  // entirely and write its own row.
   const retry = await sendMessage(
     {
       leadId: lead.id,
@@ -805,7 +994,7 @@ test("reconcile: absent from Sent Mail permits exactly one resend", async () => 
       sequenceStep: 5,
       leadTimezone: TZ,
     },
-    { transport: fileTransport(), now: () => NOW, pacing: NO_GAP }
+    { transport: liveTransport(), now: () => NOW, pacing: NO_GAP }
   )
   assert.equal(retry.status, "sent")
   if (retry.status === "sent") assert.equal(retry.rowId, rowId)
@@ -840,7 +1029,9 @@ test("an unreconciled 'sending' row blocks any further attempt at that step", as
     )
 
   // This is the case that would produce a duplicate cold email if the row were
-  // simply retried: the previous attempt may well have been delivered.
+  // simply retried: the previous attempt may well have been delivered. Live
+  // transport, because only a real send can produce that duplicate — a dry run
+  // is outside `ux_msg_step` and writes its own row without being blocked.
   const outcome = await sendMessage(
     {
       leadId: lead.id,
@@ -851,7 +1042,7 @@ test("an unreconciled 'sending' row blocks any further attempt at that step", as
       sequenceStep: 6,
       leadTimezone: TZ,
     },
-    { transport: fileTransport(), now: () => NOW, pacing: NO_GAP }
+    { transport: liveTransport(), now: () => NOW, pacing: NO_GAP }
   )
   assert.equal(outcome.status, "blocked")
   if (outcome.status === "blocked") {

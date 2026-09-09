@@ -4,7 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -k -n next,worker -c cyan,magenta \"next dev\" \"node worker/main.ts\"",
+    "dev:web": "next dev",
+    "worker": "node worker/main.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
