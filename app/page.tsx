@@ -63,7 +63,10 @@ export default function DashboardPage() {
             <CardTitle>Sending</CardTitle>
           </CardHeader>
           <CardContent>
-            <SendToggle initialEnabled={send.enabled} initialDryRunCount={send.dryRunCount} />
+            <SendToggle
+              initialEnabled={send.enabled}
+              initialDryRunCount={send.dryRunCount}
+            />
           </CardContent>
         </Card>
         <Card>
@@ -85,7 +88,9 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {mailboxes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No mailboxes configured yet.</p>
+            <p className="text-sm text-muted-foreground">
+              No mailboxes configured yet.
+            </p>
           ) : (
             mailboxes.map((m) => <MailboxRow key={m.id} mailbox={m} />)
           )}
@@ -98,7 +103,9 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent className="flex flex-col divide-y divide-border">
           {activity.length === 0 ? (
-            <p className="py-2 text-sm text-muted-foreground">Nothing has happened yet.</p>
+            <p className="py-2 text-sm text-muted-foreground">
+              Nothing has happened yet.
+            </p>
           ) : (
             activity.map((item) => <ActivityRow key={item.id} item={item} />)
           )}
@@ -108,13 +115,23 @@ export default function DashboardPage() {
   )
 }
 
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Tile({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string
+  sub?: string
+}) {
   return (
     <Card size="sm">
       <CardContent className="flex flex-col gap-0.5">
         <span className="text-xs text-muted-foreground">{label}</span>
         <span className="text-2xl font-medium tabular-nums">{value}</span>
-        {sub ? <span className="text-xs text-muted-foreground">{sub}</span> : null}
+        {sub ? (
+          <span className="text-xs text-muted-foreground">{sub}</span>
+        ) : null}
       </CardContent>
     </Card>
   )
@@ -126,7 +143,16 @@ function Tiles({ tiles }: { tiles: DashboardTiles }) {
       <Tile
         label="Sent today"
         value={`${tiles.sentToday} / ${tiles.dailyCap}`}
-        sub={tiles.dryRunToday > 0 ? `+${tiles.dryRunToday} rehearsal` : undefined}
+        // The ramp is the number that actually stops sending, so say so when
+        // it is below the configured ceiling. Otherwise sending appears to
+        // stall at 5 with the tile reading "/ 25" and nothing explaining it.
+        sub={
+          tiles.warmingUp
+            ? `warming up toward ${tiles.configuredCap}`
+            : tiles.dryRunToday > 0
+              ? `+${tiles.dryRunToday} rehearsal`
+              : undefined
+        }
       />
       <Tile label="Replies (7d)" value={String(tiles.repliesLast7d)} />
       <Tile
@@ -138,9 +164,15 @@ function Tiles({ tiles }: { tiles: DashboardTiles }) {
       <Tile
         label="Hard bounce rate"
         value={
-          tiles.hardBounceRateLast50 === null ? "—" : formatPercent(tiles.hardBounceRateLast50)
+          tiles.hardBounceRateLast50 === null
+            ? "—"
+            : formatPercent(tiles.hardBounceRateLast50)
         }
-        sub={tiles.hardBounceRateLast50 === null ? "not enough data" : "last 50 sends"}
+        sub={
+          tiles.hardBounceRateLast50 === null
+            ? "not enough data"
+            : "last 50 sends"
+        }
       />
     </div>
   )
@@ -149,12 +181,15 @@ function Tiles({ tiles }: { tiles: DashboardTiles }) {
 function StopBanner() {
   return (
     <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
-      <p className="font-medium text-destructive">Sending is halted — a STOP file is present.</p>
+      <p className="font-medium text-destructive">
+        Sending is halted — a STOP file is present.
+      </p>
       <p className="mt-1 text-muted-foreground">
-        Delete the <code className="text-xs">STOP</code> file in the project root (or the path
-        named by <code className="text-xs">VENDING_STOP_FILE</code>, if set) to let the engine
-        resume. Nothing else on this page can do that for you — it is a filesystem kill switch
-        by design.
+        Delete the <code className="text-xs">STOP</code> file in the project
+        root (or the path named by{" "}
+        <code className="text-xs">VENDING_STOP_FILE</code>, if set) to let the
+        engine resume. Nothing else on this page can do that for you — it is a
+        filesystem kill switch by design.
       </p>
     </div>
   )
@@ -170,8 +205,9 @@ function BreakerBanner({ breaker }: { breaker: BreakerInfo }) {
           </p>
           <p className="mt-1 text-muted-foreground">{breaker.reason}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Tripped {formatDateTime(breaker.trippedAt)}. This is a deliberate safety gate, not
-            an error to dismiss — re-arming is a decision only you make.
+            Tripped {formatDateTime(breaker.trippedAt)}. This is a deliberate
+            safety gate, not an error to dismiss — re-arming is a decision only
+            you make.
           </p>
         </div>
         <RearmBreakerButton />
@@ -215,7 +251,8 @@ function QueueStatus({
           href="#activity-feed"
           className="text-xs text-destructive underline-offset-2 hover:underline"
         >
-          {queue.failed} task{queue.failed === 1 ? "" : "s"} gave up after repeated failures
+          {queue.failed} task{queue.failed === 1 ? "" : "s"} gave up after
+          repeated failures
           {latestReason ? ` — "${latestReason}"` : ""}
         </a>
       )}
@@ -229,7 +266,9 @@ function MailboxRow({ mailbox }: { mailbox: MailboxHealthItem }) {
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
       <div className="min-w-0">
         <div className="truncate font-medium">{mailbox.email}</div>
-        <div className="text-xs text-muted-foreground">{mailbox.dailyCap}/day</div>
+        <div className="text-xs text-muted-foreground">
+          {mailbox.dailyCap}/day
+        </div>
       </div>
       <Badge variant={paused ? "destructive" : "outline"}>
         {paused
@@ -245,8 +284,12 @@ function ActivityRow({ item }: { item: ActivityItem }) {
     <div className="flex items-start justify-between gap-3 py-2 text-sm">
       <div className="min-w-0">
         <span>{item.text}</span>
-        {item.leadName && <span className="text-muted-foreground"> — {item.leadName}</span>}
-        {item.extra && <div className="text-xs text-muted-foreground">{item.extra}</div>}
+        {item.leadName && (
+          <span className="text-muted-foreground"> — {item.leadName}</span>
+        )}
+        {item.extra && (
+          <div className="text-xs text-muted-foreground">{item.extra}</div>
+        )}
       </div>
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
         {item.createdAt ? formatDateTime(item.createdAt) : ""}
@@ -259,13 +302,18 @@ function GetStarted() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
       <h1 className="text-lg font-medium">Welcome</h1>
-      <p className="mt-2 text-sm text-muted-foreground">No leads yet. Two steps to get moving:</p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        No leads yet. Two steps to get moving:
+      </p>
       <ol className="mt-4 flex flex-col gap-3 text-sm">
         <li className="rounded-lg border border-border px-3 py-2.5">
-          <span className="font-medium">1. Add an AI provider and a mailbox.</span>
+          <span className="font-medium">
+            1. Add an AI provider and a mailbox.
+          </span>
           <p className="mt-1 text-muted-foreground">
-            Settings needs at least one AI provider (for writing emails), one Gmail mailbox (for
-            sending them), and your physical address under &quot;About you&quot; for CAN-SPAM.
+            Settings needs at least one AI provider (for writing emails), one
+            Gmail mailbox (for sending them), and your physical address under
+            &quot;About you&quot; for CAN-SPAM.
           </p>
           <Button render={<Link href="/settings" />} size="sm" className="mt-2">
             Go to Settings
@@ -274,10 +322,15 @@ function GetStarted() {
         <li className="rounded-lg border border-border px-3 py-2.5">
           <span className="font-medium">2. Find locations.</span>
           <p className="mt-1 text-muted-foreground">
-            Search a city or ZIP in Leads, pick the business types you want, and import what
-            looks good.
+            Search a city or ZIP in Leads, pick the business types you want, and
+            import what looks good.
           </p>
-          <Button render={<Link href="/leads" />} size="sm" variant="outline" className="mt-2">
+          <Button
+            render={<Link href="/leads" />}
+            size="sm"
+            variant="outline"
+            className="mt-2"
+          >
             Go to Leads
           </Button>
         </li>

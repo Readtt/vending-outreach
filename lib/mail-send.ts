@@ -32,10 +32,11 @@
  * reports `duplicate` exactly as a repeated real send does, and rehearsing
  * something that already went out for real is refused outright.
  *
- * `countSentToday` counts dry-run rows, deliberately, so the daily cap and the
- * warm-up ramp are exercised faithfully. That only holds because the count is
- * bounded: one row per step per lead per namespace. Do not relax either index
- * without revisiting it.
+ * `countSentToday` does NOT count dry-run rows. The daily cap protects the
+ * sending account's standing with Gmail, and a rehearsal writes a file without
+ * touching the wire, so it costs that account nothing. Counting them meant an
+ * afternoon of reading drafts silently spent the day's real quota, after which
+ * sending was switched on and nothing went out.
  *
  * `clearDryRunMessages()` / `countDryRunMessages()` remain for tidying up
  * before going live. Nothing is blocked if you forget, but the rows do consume
@@ -2657,10 +2658,10 @@ export function countDryRunMessages(): number {
 /**
  * Deletes dry-run rows.
  *
- * No longer required for correctness — `ux_msg_step` skips them, so a real
- * send of a dry-run step goes through either way (migration 3). It is now for
- * tidying up: dry-run rows are counted by `countSentToday`, so leaving a large
- * rehearsal behind eats into the first real day's cap.
+ * Not required for correctness. `ux_msg_step` skips dry-run rows, so a real
+ * send of a rehearsed step goes through either way (migration 3), and
+ * `countSentToday` excludes them, so they no longer eat the daily cap. This is
+ * housekeeping only — for when the rehearsal history stops being interesting.
  */
 export function clearDryRunMessages(): number {
   const result = getDb()

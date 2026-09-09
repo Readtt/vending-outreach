@@ -20,6 +20,8 @@ import {
   getMailboxPause,
   isSendEnabled,
   isStopFilePresent,
+  getPacingConfig,
+  warmupCap,
 } from "@/lib/mail-send"
 import { getSendingSettings } from "./settings/data"
 import { humanizeEvent } from "./humanize-event"
@@ -47,9 +49,34 @@ export function hasAnyLeads(): boolean {
 export function getDashboardTiles(now: number = Date.now()): DashboardTiles {
   const stats = dashboardStats(operatorLocalMidnight(now), now)
   const sending = getSendingSettings()
+
+  // The cap that actually stops sending is the warm-up ramp, not the number in
+  // Settings. On day one that is 5, climbing ~20% per day with real sending
+  // activity. Showing "0 / 25" while the gate refuses at 5 gives the user no
+  // way to understand why sending stopped, so show the effective cap and keep
+  // the configured one alongside it as the ceiling.
+  const mailboxes = listMailboxes().filter((m) => m.status === "active")
+  const pacing = getPacingConfig()
+  const effectiveCap = mailboxes.reduce(
+    (total, mailbox) =>
+      total +
+      warmupCap(
+        mailbox.id,
+        pacing,
+        Math.min(
+          mailbox.daily_cap ?? sending.emailsPerDay,
+          sending.emailsPerDay
+        ),
+        now
+      ),
+    0
+  )
+
   return {
     sentToday: stats.sentToday,
-    dailyCap: sending.emailsPerDay,
+    dailyCap: mailboxes.length === 0 ? sending.emailsPerDay : effectiveCap,
+    configuredCap: sending.emailsPerDay,
+    warmingUp: mailboxes.length > 0 && effectiveCap < sending.emailsPerDay,
     dryRunToday: stats.dryRunToday,
     repliesLast7d: stats.repliesLast7d,
     hotLeads: stats.hotLeads,
@@ -59,7 +86,10 @@ export function getDashboardTiles(now: number = Date.now()): DashboardTiles {
   }
 }
 
-export function getSendControlState(): { enabled: boolean; dryRunCount: number } {
+export function getSendControlState(): {
+  enabled: boolean
+  dryRunCount: number
+} {
   return { enabled: isSendEnabled(), dryRunCount: countDryRunMessages() }
 }
 
@@ -70,7 +100,11 @@ export function getStopFilePresent(): boolean {
 export function getBreakerInfo(): BreakerInfo | null {
   const state = getCircuitBreakerState()
   if (!state) return null
-  return { breaker: state.breaker, reason: state.reason, trippedAt: state.trippedAt }
+  return {
+    breaker: state.breaker,
+    reason: state.reason,
+    trippedAt: state.trippedAt,
+  }
 }
 
 export function getQueueSummary(): QueueSummary {

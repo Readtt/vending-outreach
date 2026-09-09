@@ -8,8 +8,17 @@
 
 export interface DashboardTiles {
   sentToday: number
-  /** From Settings → Sending ("emails per day"). Null if never configured (uses the default). */
+  /**
+   * The cap that will actually stop sending today: the warm-up ramp, summed
+   * across active mailboxes. Day one is 5 per mailbox, climbing ~20% per day
+   * of real sending activity. This is NOT the number in Settings — showing
+   * that one made sending appear to stall for no reason.
+   */
   dailyCap: number
+  /** The ceiling from Settings → Sending, which the ramp climbs toward. */
+  configuredCap: number
+  /** True while the ramp is still below the configured ceiling. */
+  warmingUp: boolean
   dryRunToday: number
   repliesLast7d: number
   hotLeads: number
