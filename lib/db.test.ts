@@ -74,13 +74,22 @@ function clearLeads(): void {
 // Migration 3
 // ---------------------------------------------------------------------------
 
-test("migration 3 adds dry_run and rebuilds ux_msg_step to exclude it", () => {
+function indexSql(name: string): string {
+  const row = getDb()
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`)
+    .get(name) as { sql: string } | undefined
+  assert.ok(row, `index ${name} is missing`)
+  return row.sql
+}
+
+test("migration 3 adds dry_run and splits ux_msg_step into two namespaces", () => {
   const db = getDb()
 
   const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
     user_version: number
   }
-  assert.equal(version, 3)
+  // Not `=== 3`: this must keep passing the moment a migration 4 lands.
+  assert.ok(version >= 3, `expected user_version >= 3, got ${version}`)
 
   const columns = db
     .prepare(`PRAGMA table_info(messages)`)
@@ -90,12 +99,138 @@ test("migration 3 adds dry_run and rebuilds ux_msg_step to exclude it", () => {
   assert.equal(dryRun.notnull, 1)
   assert.equal(dryRun.dflt_value, "0")
 
-  const index = db
-    .prepare(
-      `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ux_msg_step'`
+  // Every term is asserted, not just the new one. This index is *the*
+  // structural guarantee that a lead cannot receive the same step twice
+  // (spec §0.4); a migration that quietly dropped `direction = 'out'` or
+  // `sequence_step IS NOT NULL` would widen or void it, and a test that only
+  // looked for `dry_run` would wave that through.
+  const real = indexSql("ux_msg_step")
+  assert.match(real, /ON messages\(lead_id, sequence_step\)/)
+  assert.match(real, /direction = 'out'/)
+  assert.match(real, /sequence_step IS NOT NULL/)
+  assert.match(real, /dry_run = 0/)
+  assert.match(real, /^CREATE UNIQUE INDEX/)
+
+  const rehearsal = indexSql("ux_msg_step_dryrun")
+  assert.match(rehearsal, /ON messages\(lead_id, sequence_step\)/)
+  assert.match(rehearsal, /direction = 'out'/)
+  assert.match(rehearsal, /sequence_step IS NOT NULL/)
+  assert.match(rehearsal, /dry_run = 1/)
+  assert.match(rehearsal, /^CREATE UNIQUE INDEX/)
+})
+
+test("migration 3 backfills legacy dry-run rows and unblocks their real send", () => {
+  // Rows written before the column existed carry `{"dryRun":true}` in `error`.
+  // `ADD COLUMN ... NOT NULL DEFAULT 0` would stamp them as real sends, so
+  // they would keep blocking their lead's real email forever while being
+  // invisible to `countDryRunMessages` and unreachable by
+  // `clearDryRunMessages` — the fix would ship with no remediation for the
+  // rows it was written to rescue.
+  const mainPath = process.env.VENDING_DB_PATH as string
+  const legacyPath = path.join(TMP_ROOT, "legacy-v2.db")
+
+  try {
+    closeDb()
+    process.env.VENDING_DB_PATH = legacyPath
+    const fresh = getDb()
+
+    // Rewind the schema to its pre-migration-3 shape. Done by undoing
+    // migration 3 rather than by restating migrations 1 and 2, so this fixture
+    // cannot drift away from the real schema.
+    fresh.exec(`
+      DROP INDEX ux_msg_step;
+      DROP INDEX ux_msg_step_dryrun;
+      ALTER TABLE messages DROP COLUMN dry_run;
+      CREATE UNIQUE INDEX ux_msg_step ON messages(lead_id, sequence_step)
+        WHERE direction = 'out' AND sequence_step IS NOT NULL;
+      PRAGMA user_version = 2;
+    `)
+
+    const leadId = randomUUID()
+    fresh
+      .prepare(
+        `INSERT INTO leads (id, name, status, score, created_at)
+         VALUES (?, 'Legacy Cafe', 'contacted', 0, 1)`
+      )
+      .run(leadId)
+
+    const legacyDryRunId = randomUUID()
+    const legacyRealId = randomUUID()
+    const insert = fresh.prepare(
+      `INSERT INTO messages (id, lead_id, direction, sequence_step, outreach_id,
+                             status, error, sent_at, created_at)
+       VALUES (?, ?, 'out', ?, ?, 'sent', ?, 1, 1)`
     )
-    .get() as { sql: string }
-  assert.match(index.sql, /dry_run = 0/)
+    insert.run(
+      legacyDryRunId,
+      leadId,
+      1,
+      randomUUID(),
+      JSON.stringify({ attempts: 1, step: 1, dryRun: true })
+    )
+    insert.run(
+      legacyRealId,
+      leadId,
+      2,
+      randomUUID(),
+      JSON.stringify({ attempts: 1, step: 2 })
+    )
+
+    closeDb()
+    const migrated = getDb() // migration 3 runs on open
+
+    const { user_version: version } = migrated
+      .prepare("PRAGMA user_version")
+      .get() as { user_version: number }
+    assert.equal(version, 3)
+
+    const rows = migrated
+      .prepare(`SELECT id, dry_run FROM messages ORDER BY sequence_step`)
+      .all() as unknown as { id: string; dry_run: number }[]
+    assert.deepEqual(
+      // Re-wrapped because node:sqlite hands back null-prototype objects and
+      // deepEqual compares prototypes.
+      rows.map((row) => ({ id: row.id, dry_run: row.dry_run })),
+      [
+        { id: legacyDryRunId, dry_run: 1 },
+        { id: legacyRealId, dry_run: 0 },
+      ]
+    )
+
+    // The remediation helpers can now see it...
+    const counted = migrated
+      .prepare(
+        `SELECT count(*) AS n FROM messages WHERE direction = 'out' AND dry_run = 1`
+      )
+      .get() as { n: number | bigint }
+    assert.equal(Number(counted.n), 1)
+
+    // ...and, the actual point: step 1's real send is no longer blocked.
+    migrated
+      .prepare(
+        `INSERT INTO messages (id, lead_id, direction, sequence_step, outreach_id,
+                               status, sent_at, created_at, dry_run)
+         VALUES (?, ?, 'out', 1, ?, 'sent', 2, 2, 0)`
+      )
+      .run(randomUUID(), leadId, randomUUID())
+
+    // Step 2 was a real send and must still be blocked.
+    assert.throws(
+      () =>
+        migrated
+          .prepare(
+            `INSERT INTO messages (id, lead_id, direction, sequence_step, outreach_id,
+                                   status, sent_at, created_at, dry_run)
+             VALUES (?, ?, 'out', 2, ?, 'sent', 2, 2, 0)`
+          )
+          .run(randomUUID(), leadId, randomUUID()),
+      /UNIQUE constraint failed/
+    )
+  } finally {
+    closeDb()
+    process.env.VENDING_DB_PATH = mainPath
+    getDb()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -223,6 +358,16 @@ test("an empty or blank osm_id is stored as null, not as a shared identity", () 
 // listLeads / countLeads
 // ---------------------------------------------------------------------------
 
+/**
+ * `created_at` is not in `UPDATABLE_LEAD_COLUMNS` — deliberately, it is set
+ * once at insert — so ordering fixtures have to reach past `updateLead`.
+ */
+function setCreatedAt(id: string, createdAt: number): void {
+  getDb()
+    .prepare(`UPDATE leads SET created_at = ? WHERE id = ?`)
+    .run(createdAt, id)
+}
+
 function seedFilterFixtures(): Record<string, LeadRow> {
   clearLeads()
   const alpha = newLead({ name: "Alpha Coffee", address: "1 High St" })
@@ -233,6 +378,12 @@ function seedFilterFixtures(): Record<string, LeadRow> {
   updateLead(bravo.id, { status: "contacted", score: 30, email: "" })
   updateLead(charlie.id, { status: "ready", score: 20 })
 
+  // All three land in the same millisecond otherwise, which makes every
+  // ordering assertion below unfalsifiable.
+  setCreatedAt(alpha.id, 1_000)
+  setCreatedAt(bravo.id, 2_000)
+  setCreatedAt(charlie.id, 3_000)
+
   return {
     alpha: getLeadById(alpha.id) as LeadRow,
     bravo: getLeadById(bravo.id) as LeadRow,
@@ -242,9 +393,10 @@ function seedFilterFixtures(): Record<string, LeadRow> {
 
 test("listLeads with no filter returns everything, newest first", () => {
   const { alpha, bravo, charlie } = seedFilterFixtures()
-  const ids = listLeads().map((lead) => lead.id)
-  assert.equal(ids.length, 3)
-  assert.deepEqual([...ids].sort(), [alpha.id, bravo.id, charlie.id].sort())
+  assert.deepEqual(
+    listLeads().map((lead) => lead.id),
+    [charlie.id, bravo.id, alpha.id]
+  )
 })
 
 test("listLeads filters by a single status and by a list of statuses", () => {
@@ -254,11 +406,15 @@ test("listLeads filters by a single status and by a list of statuses", () => {
   assert.deepEqual([...ready].sort(), [alpha.id, charlie.id].sort())
   assert.equal(countLeads({ status: "ready" }), 2)
 
+  assert.deepEqual(
+    listLeads({ status: "contacted" }).map((lead) => lead.id),
+    [bravo.id]
+  )
+
   const either = listLeads({ status: ["ready", "contacted"] })
   assert.equal(either.length, 3)
   assert.equal(countLeads({ status: ["contacted"] }), 1)
   assert.equal(countLeads({ status: "new" }), 0)
-  assert.equal(bravo.status, "contacted")
 })
 
 test("an empty status list matches nothing rather than everything", () => {
@@ -277,9 +433,15 @@ test("listLeads search is case-insensitive across name and address", () => {
   const byAddress = listLeads({ search: "high st" }).map((lead) => lead.id)
   assert.deepEqual([...byAddress].sort(), [alpha.id, charlie.id].sort())
 
+  // The other address, so the match is shown to be discriminating rather than
+  // just returning whatever shares a street suffix.
+  assert.deepEqual(
+    listLeads({ search: "Broad" }).map((lead) => lead.id),
+    [bravo.id]
+  )
+
   assert.equal(listLeads({ search: "  " }).length, 3)
   assert.equal(listLeads({ search: "nothing matches this" }).length, 0)
-  assert.ok(bravo.id)
 })
 
 test("a LIKE wildcard typed into search is matched literally", () => {
@@ -312,33 +474,88 @@ test("hasEmail keeps only leads with a non-null, non-empty email", () => {
 test("listLeads orders by score and by created_at in both directions", () => {
   const { alpha, bravo, charlie } = seedFilterFixtures()
 
-  const byScore = listLeads({ orderBy: "score DESC" }).map((lead) => lead.id)
-  assert.deepEqual(byScore, [bravo.id, charlie.id, alpha.id])
-
-  const ascending = listLeads({ orderBy: "created_at ASC" })
-  const descending = listLeads({ orderBy: "created_at DESC" })
+  // Scores 10/20/30 and created_at 1000/2000/3000, so each ordering below has
+  // exactly one correct answer.
   assert.deepEqual(
-    ascending.map((lead) => lead.id),
-    [...descending].reverse().map((lead) => lead.id)
+    listLeads({ orderBy: "score DESC" }).map((lead) => lead.id),
+    [bravo.id, charlie.id, alpha.id]
+  )
+  assert.deepEqual(
+    listLeads({ orderBy: "created_at ASC" }).map((lead) => lead.id),
+    [alpha.id, bravo.id, charlie.id]
+  )
+  assert.deepEqual(
+    listLeads({ orderBy: "created_at DESC" }).map((lead) => lead.id),
+    [charlie.id, bravo.id, alpha.id]
   )
 })
 
-test("limit and offset page without repeating or skipping a row", () => {
-  seedFilterFixtures()
+test("every ordering resolves ties by id, giving a total order to page over", () => {
+  // Why this matters: a bulk Overpass import writes hundreds of leads inside
+  // one millisecond, all with the starting score, so `created_at DESC` and
+  // `score DESC` are massively tied. SQL leaves the order of tied rows
+  // unspecified, and LIMIT/OFFSET paging over an unspecified order is free to
+  // repeat and drop rows between pages.
+  //
+  // Asserting "page1 ++ page2 ++ page3 == unpaged" does NOT catch this: I
+  // measured it, and SQLite's sorter happens to be stable for a plain table
+  // scan at every size I tried, so that assertion holds with or without a
+  // tiebreaker. What is actually falsifiable is the tiebreaker's own contract
+  // — ties come back in `id` order — because rows are inserted with random
+  // UUIDs, so insertion order and id order disagree. Remove `id` from
+  // LEAD_ORDER_BY and this test fails; the paging assertion below does not.
+  clearLeads()
+  const ids: string[] = []
+  for (let index = 0; index < 8; index++) {
+    const lead = newLead({ name: `Tied ${index}` })
+    updateLead(lead.id, { score: 7 })
+    setCreatedAt(lead.id, 5_000)
+    ids.push(lead.id)
+  }
 
-  const all = listLeads({ orderBy: "score DESC" })
-  const first = listLeads({ orderBy: "score DESC", limit: 2 })
-  const rest = listLeads({ orderBy: "score DESC", limit: 2, offset: 2 })
+  const idsDesc = [...ids].sort().reverse()
+  const idsAsc = [...ids].sort()
 
   assert.deepEqual(
-    [...first, ...rest].map((lead) => lead.id),
-    all.map((lead) => lead.id)
+    listLeads({ orderBy: "score DESC" }).map((lead) => lead.id),
+    idsDesc
   )
+  assert.deepEqual(
+    listLeads({ orderBy: "created_at DESC" }).map((lead) => lead.id),
+    idsDesc
+  )
+  // created_at ASC tiebreaks ascending, so the whole ordering flips.
+  assert.deepEqual(
+    listLeads({ orderBy: "created_at ASC" }).map((lead) => lead.id),
+    idsAsc
+  )
+
+  // The property the total order buys: paging never repeats or drops a row.
+  for (const orderBy of [
+    "score DESC",
+    "created_at DESC",
+    "created_at ASC",
+  ] as const) {
+    const paged = [0, 3, 6].flatMap((offset) =>
+      listLeads({ orderBy, limit: 3, offset }).map((lead) => lead.id)
+    )
+    assert.deepEqual(
+      paged,
+      listLeads({ orderBy }).map((lead) => lead.id),
+      `paging diverged for "${orderBy}"`
+    )
+    assert.equal(new Set(paged).size, 8)
+  }
+})
+
+test("limit and offset edge cases", () => {
+  seedFilterFixtures()
 
   // offset without limit is legal — SQLite needs a LIMIT clause, which the
   // helper supplies as -1.
   assert.equal(listLeads({ offset: 1 }).length, 2)
   assert.equal(listLeads({ limit: 0 }).length, 0)
+  assert.equal(listLeads({ offset: 99 }).length, 0)
 
   // count is the size of the match, not of the page.
   assert.equal(countLeads({ limit: 1 }), 3)

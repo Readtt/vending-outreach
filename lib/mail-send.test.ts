@@ -37,6 +37,7 @@ import {
   getCircuitBreakerState,
   isSendEnabled,
   lastSentAt,
+  outreachIdForDedupeKey,
   rearmCircuitBreaker,
   reconcile,
   sendMessage,
@@ -742,14 +743,11 @@ test("a real send is still blocked once a real send of that step exists", async 
   getDb().exec("DELETE FROM events")
 })
 
-test("two dry runs of the same step do NOT collide — a known fidelity gap", async () => {
-  // Documenting a consequence of the index, not endorsing it. Because
-  // `ux_msg_step` skips `dry_run = 1` entirely, dry runs no longer dedupe
-  // against each other, so rehearsing the same step twice writes two rows and
-  // consumes two slots of the derived daily count. Nothing is sent either way.
-  //
-  // If a future migration adds a matching `WHERE ... dry_run = 1` index to
-  // restore that, this test is the one that will tell you.
+test("a repeated dry run of the same step is a duplicate, exactly like a repeated real send", async () => {
+  // `ux_msg_step_dryrun` is what bounds this. Without it a rehearsal is
+  // unbounded, and since `countSentToday` counts dry-run rows, re-running one
+  // would over-consume the daily cap without limit — the inverse of the
+  // fidelity the dry run exists to provide.
   resetGlobalState()
   const mailbox = seedMailbox()
   const lead = seedLead()
@@ -766,19 +764,75 @@ test("two dry runs of the same step do NOT collide — a known fidelity gap", as
   const deps = { transport: fileTransport(), now: () => NOW, pacing: NO_GAP }
 
   assert.equal((await sendMessage(input, deps)).status, "sent")
-  assert.equal((await sendMessage(input, deps)).status, "sent")
+
+  const second = await sendMessage(input, deps)
+  assert.equal(second.status, "duplicate")
+  if (second.status !== "duplicate") return
+  assert.match(second.reason, /already sent/)
 
   const count = getDb()
     .prepare(
       `SELECT count(*) AS n FROM messages WHERE lead_id = ? AND dry_run = 1`
     )
     .get(lead.id) as { n: number }
-  assert.equal(Number(count.n), 2)
-  assert.equal(countDryRunMessages(), 2)
+  assert.equal(Number(count.n), 1)
 
-  // The tidy-up path keys off the column now, not a substring of `error`.
-  assert.equal(clearDryRunMessages(), 2)
+  // The tidy-up path keys off the column now, not a substring of `error`, and
+  // is what lets the user rehearse the same batch again.
+  assert.equal(countDryRunMessages(), 1)
+  assert.equal(clearDryRunMessages(), 1)
   assert.equal(countDryRunMessages(), 0)
+  assert.equal((await sendMessage(input, deps)).status, "sent")
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
+})
+
+test("a rehearsal is refused once the step has really been sent", async () => {
+  // The real -> dry direction. Nothing structural stops it: the two indexes
+  // cover disjoint rows, so without the pre-check the rehearsal writes its own
+  // row and reports a cheerful `sent`, giving no hint that the real email left
+  // days ago.
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "Vending machines for your break room",
+    text: "Hi — quick question about your break room.",
+    sequenceStep: 4,
+    leadTimezone: TZ,
+  }
+
+  const real = await sendMessage(input, {
+    transport: liveTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(real.status, "sent")
+  if (real.status !== "sent") return
+
+  const rehearsal = await sendMessage(input, {
+    transport: fileTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(rehearsal.status, "duplicate")
+  if (rehearsal.status !== "duplicate") return
+  assert.match(rehearsal.reason, /already sent for real/)
+  assert.equal(rehearsal.rowId, real.rowId)
+
+  // No rehearsal row was written, so nothing extra eats into the daily count.
+  assert.equal(countDryRunMessages(), 0)
+  const count = getDb()
+    .prepare(
+      `SELECT count(*) AS n FROM messages WHERE lead_id = ? AND direction = 'out'`
+    )
+    .get(lead.id) as { n: number }
+  assert.equal(Number(count.n), 1)
 
   getDb().exec("DELETE FROM messages")
   getDb().exec("DELETE FROM events")
@@ -822,6 +876,105 @@ test("an off-sequence send is deduped by its key", async () => {
 
   assert.equal((await sendMessage(input, deps)).status, "sent")
   assert.equal((await sendMessage(input, deps)).status, "duplicate")
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
+})
+
+test("a dry run does not consume the real send of an off-sequence message", async () => {
+  // The same bug as the sequence-step case, one constraint over. Off-sequence
+  // dedupe rides on UNIQUE(outreach_id), which has no dry-run exclusion to
+  // give it, so the rehearsal is namespaced by key instead. Without that, a
+  // rehearsed auto-reply occupies the real slot and the real send is refused
+  // as "already sent" — the reply the recipient asked for never arrives.
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "The one-pager you asked for",
+    text: "Here it is.",
+    sequenceStep: null,
+    dedupeKey: `send_more_info:${lead.id}`,
+    isAutoReply: true,
+  }
+
+  const rehearsal = await sendMessage(input, {
+    transport: fileTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(rehearsal.status, "sent")
+  if (rehearsal.status !== "sent") return
+  assert.equal(rehearsal.dryRun, true)
+
+  const real = await sendMessage(input, {
+    transport: liveTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(real.status, "sent")
+  if (real.status !== "sent") return
+  assert.equal(real.dryRun, false)
+
+  // Distinct rows under distinct outreach ids: the rehearsal is namespaced, so
+  // the real send still gets the bare id that reconciliation would search for.
+  assert.notEqual(real.rowId, rehearsal.rowId)
+  assert.notEqual(real.outreachId, rehearsal.outreachId)
+  assert.equal(real.outreachId, outreachIdForDedupeKey(input.dedupeKey))
+
+  // A repeated real send is still a duplicate — the namespacing did not
+  // loosen the guarantee for the send that actually reaches someone.
+  assert.equal(
+    (
+      await sendMessage(input, {
+        transport: liveTransport(),
+        now: () => NOW,
+        pacing: NO_GAP,
+      })
+    ).status,
+    "duplicate"
+  )
+
+  getDb().exec("DELETE FROM messages")
+  getDb().exec("DELETE FROM events")
+})
+
+test("an off-sequence rehearsal is refused once the real one has been sent", async () => {
+  resetGlobalState()
+  const mailbox = seedMailbox()
+  const lead = seedLead()
+  const input = {
+    leadId: lead.id,
+    mailboxId: mailbox.id,
+    to: lead.email,
+    subject: "The one-pager you asked for",
+    text: "Here it is.",
+    sequenceStep: null,
+    dedupeKey: `send_more_info:${lead.id}`,
+    isAutoReply: true,
+  }
+
+  const real = await sendMessage(input, {
+    transport: liveTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(real.status, "sent")
+  if (real.status !== "sent") return
+
+  const rehearsal = await sendMessage(input, {
+    transport: fileTransport(),
+    now: () => NOW,
+    pacing: NO_GAP,
+  })
+  assert.equal(rehearsal.status, "duplicate")
+  if (rehearsal.status !== "duplicate") return
+  assert.match(rehearsal.reason, /already sent for real/)
+  assert.equal(rehearsal.rowId, real.rowId)
+  assert.equal(countDryRunMessages(), 0)
 
   getDb().exec("DELETE FROM messages")
   getDb().exec("DELETE FROM events")
@@ -1009,7 +1162,7 @@ test("reconcile: absent from Sent Mail permits exactly one resend", async () => 
   getDb().exec("DELETE FROM messages")
 })
 
-test("an unreconciled 'sending' row blocks any further attempt at that step", async () => {
+test("an unreconciled 'sending' row blocks any further real attempt at that step", async () => {
   resetGlobalState()
   const mailbox = seedMailbox()
   const lead = seedLead()

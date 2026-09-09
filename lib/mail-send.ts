@@ -24,13 +24,22 @@
  * run has to exercise the *real* idempotency and pacing paths, and those are
  * keyed off rows existing.
  *
- * `ux_msg_step` excludes `dry_run = 1` rows (migration 3), so a dry run does
- * NOT block the later real send of that step — dry-running the first 200
- * leads used to burn them permanently. `countSentToday` still counts dry-run
- * rows, so the daily cap and warm-up ramp are exercised faithfully.
+ * Rehearsals and real sends occupy separate uniqueness namespaces (migration
+ * 3): `ux_msg_step_dryrun` vs `ux_msg_step` for a sequence step, and a
+ * `dryrun:`-prefixed dedupe key vs the bare one for an off-sequence send. So a
+ * rehearsal never consumes the real send's slot — dry-running the first 200
+ * leads used to burn them permanently — while a repeated rehearsal still
+ * reports `duplicate` exactly as a repeated real send does, and rehearsing
+ * something that already went out for real is refused outright.
+ *
+ * `countSentToday` counts dry-run rows, deliberately, so the daily cap and the
+ * warm-up ramp are exercised faithfully. That only holds because the count is
+ * bounded: one row per step per lead per namespace. Do not relax either index
+ * without revisiting it.
  *
  * `clearDryRunMessages()` / `countDryRunMessages()` remain for tidying up
- * before going live; they are now housekeeping, not a correctness chore.
+ * before going live. Nothing is blocked if you forget, but the rows do consume
+ * the derived daily count.
  */
 
 import { createHash, randomUUID } from "node:crypto"
@@ -1945,13 +1954,48 @@ type ClaimResult =
     }
 
 /**
+ * The real send already occupying the slot a rehearsal is about to write to,
+ * if there is one.
+ *
+ * Both branches mirror the guard that governs the real path: a sequence step
+ * is owned by `ux_msg_step`, and an off-sequence send by `UNIQUE(outreach_id)`
+ * on the *unprefixed* id — the one a real send of the same dedupe key would
+ * use, not the `dryrun:`-namespaced one this attempt is carrying.
+ */
+function findRealSendForRehearsal(
+  db: ReturnType<typeof getDb>,
+  input: SendMessageInput
+): Pick<MessageRow, "id" | "status" | "sent_at"> | undefined {
+  if (input.sequenceStep !== null) {
+    return db
+      .prepare(
+        `SELECT id, status, sent_at FROM messages
+         WHERE lead_id = ? AND sequence_step = ? AND direction = 'out'
+           AND dry_run = 0 LIMIT 1`
+      )
+      .get(input.leadId, input.sequenceStep) as
+      Pick<MessageRow, "id" | "status" | "sent_at"> | undefined
+  }
+
+  if (!input.dedupeKey) return undefined
+  return db
+    .prepare(
+      `SELECT id, status, sent_at FROM messages
+       WHERE outreach_id = ? AND direction = 'out' AND dry_run = 0 LIMIT 1`
+    )
+    .get(outreachIdForDedupeKey(input.dedupeKey)) as
+    Pick<MessageRow, "id" | "status" | "sent_at"> | undefined
+}
+
+/**
  * Steps 2 + 3 of the protocol: the `messages` row is inserted with
  * `status='sending'` INSIDE a transaction, BEFORE any connection is opened,
  * and suppression is re-checked in that same transaction.
  *
  * The UNIQUE index is what structurally prevents double-sending, so the INSERT
  * is allowed to throw and the violation is interpreted rather than avoided by
- * a pre-check (a pre-check races; an index does not).
+ * a pre-check (a pre-check races; an index does not). The one pre-check in
+ * here guards the dry-run path only, where a lost race is harmless.
  *
  * `dryRun` is decided by the caller from the transport it has already chosen,
  * because it is written on this row and the row exists before the transport is
@@ -1998,6 +2042,27 @@ function claimSendSlot(
       }
     }
 
+    // Rehearsing something that already went out for real. The two indexes
+    // cover disjoint row sets, so nothing structural stops this — the dry run
+    // would write its own row and report a cheerful `sent`, with no hint that
+    // the real email left days ago. A read-only pre-check is the right tool
+    // here precisely because it is not a safety boundary: losing a race only
+    // costs an extra `.eml` on disk, and no dry run can ever reach a stranger.
+    if (dryRun) {
+      const alreadyReal = findRealSendForRehearsal(db, input)
+      if (alreadyReal) {
+        db.exec("ROLLBACK")
+        return {
+          kind: "duplicate",
+          reason:
+            `this was already sent for real (row ${alreadyReal.id}, status "${alreadyReal.status}"` +
+            `${alreadyReal.sent_at === null ? "" : ` at ${String(alreadyReal.sent_at)}`}); ` +
+            "refusing to write a rehearsal over a real send",
+          rowId: alreadyReal.id,
+        }
+      }
+    }
+
     const rowId = randomUUID()
     try {
       db.prepare(
@@ -2037,18 +2102,19 @@ function claimSendSlot(
                 `SELECT * FROM messages WHERE outreach_id = ? AND direction = 'out' LIMIT 1`
               )
               .get(outreachId)
-          : // Scoped to `dry_run = 0` because that is the only set of rows
-            // `ux_msg_step` constrains. A lead can legitimately hold both a
-            // dry-run and a real row for one step, and an unscoped LIMIT 1
-            // would report whichever the planner reached first — possibly the
-            // dry-run row, which is not what the index fired on.
+          : // Scoped to this attempt's own `dry_run` value, because rehearsals
+            // and real sends are constrained by two different partial indexes
+            // over disjoint rows. A lead can legitimately hold one of each for
+            // a step; an unscoped LIMIT 1 would report whichever the planner
+            // reached first, which is not necessarily the row that the index
+            // actually fired on.
             db
               .prepare(
                 `SELECT * FROM messages
                  WHERE lead_id = ? AND sequence_step = ? AND direction = 'out'
-                   AND dry_run = 0 LIMIT 1`
+                   AND dry_run = ? LIMIT 1`
               )
-              .get(input.leadId, input.sequenceStep)
+              .get(input.leadId, input.sequenceStep, dryRun ? 1 : 0)
       ) as MessageRow | undefined
 
       if (!existing) {
@@ -2241,12 +2307,6 @@ export async function sendMessage(
     }
   }
 
-  // Step 1: the id that travels on the wire and anchors reconciliation.
-  const outreachId =
-    input.sequenceStep === null && input.dedupeKey
-      ? outreachIdForDedupeKey(input.dedupeKey)
-      : randomUUID()
-
   // The transport is chosen BEFORE the row is claimed, because `dry_run` is a
   // column on that row and has to be correct at insert time. Inferring it
   // after the send is what put `{"dryRun":true}` into `error` and left the
@@ -2265,6 +2325,24 @@ export async function sendMessage(
       })
     }
   }
+
+  // Step 1: the id that travels on the wire and anchors reconciliation.
+  //
+  // An off-sequence send is guarded by `UNIQUE(outreach_id)` rather than by
+  // `ux_msg_step`, and that constraint has no dry-run exclusion to give it.
+  // So the rehearsal gets its own key namespace instead: without the prefix a
+  // rehearsed auto-reply occupies the real send's slot, and the real one is
+  // later refused as a duplicate that "was already sent" — the same bug as the
+  // sequence-step case, one constraint over.
+  //
+  // Safe because reconciliation is the only thing that looks an id up on the
+  // wire, and it never runs for a dry run.
+  const outreachId =
+    input.sequenceStep === null && input.dedupeKey
+      ? outreachIdForDedupeKey(
+          dryRun ? `dryrun:${input.dedupeKey}` : input.dedupeKey
+        )
+      : randomUUID()
 
   // Steps 2 + 3.
   const claim = claimSendSlot(input, startedAt, outreachId, dryRun)

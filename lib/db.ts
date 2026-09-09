@@ -199,24 +199,45 @@ const migrations: Migration[] = [
     `)
   },
   // Migration 3: mark dry-run sends structurally instead of by a marker
-  // stuffed into `error`, and take them out of the uniqueness guarantee.
+  // stuffed into `error`, and split the uniqueness guarantee in two.
   //
   // `ux_msg_step` (spec §0.4) is what stops a lead receiving the same sequence
-  // step twice. A dry run also writes a row, so under the old index every lead
-  // that was dry-run was permanently blocked from ever receiving that real
-  // email — dry-running the first 200 leads silently burned them.
+  // step twice. A dry run also writes a row, so under the old single index
+  // every lead that was dry-run was permanently blocked from ever receiving
+  // that real email — dry-running the first 200 leads silently burned them.
   //
-  // The rebuilt index only constrains real sends. `countSentToday` still
-  // counts dry-run rows on purpose (spec §7): the dry run has to exercise the
-  // daily cap and the warm-up ramp faithfully. Only uniqueness changes.
+  // Two partial indexes rather than one, over disjoint row sets:
+  //   - dry run no longer blocks the real send of that step (the bug), but
+  //   - a rehearsal still dedupes against other rehearsals, so a repeated
+  //     dry run reports `duplicate` exactly as a repeated real send does.
+  //
+  // That second half is load-bearing for `countSentToday`, which counts
+  // dry-run rows on purpose (spec §7) so a rehearsal exercises the daily cap
+  // and warm-up ramp faithfully. With nothing bounding dry-run rows, a
+  // repeated rehearsal would *over*-consume the cap without limit and the
+  // model would stop being faithful in the opposite direction.
+  //
+  // The backfill is what makes this migration safe to run on a database that
+  // predates it: rows written before the column existed carry the old
+  // `{"dryRun":true}` marker in `error` and would otherwise be stamped as real
+  // sends by the NOT NULL DEFAULT 0 — still blocking their lead's real send,
+  // and now invisible to both `countDryRunMessages` and `clearDryRunMessages`,
+  // which key off the column. That would leave the affected rows with no
+  // remediation at all.
   (db) => {
     db.exec(`
       ALTER TABLE messages ADD COLUMN dry_run INTEGER NOT NULL DEFAULT 0;
+
+      UPDATE messages SET dry_run = 1
+        WHERE direction = 'out' AND error LIKE '%"dryRun":true%';
 
       DROP INDEX ux_msg_step;
 
       CREATE UNIQUE INDEX ux_msg_step ON messages(lead_id, sequence_step)
         WHERE direction = 'out' AND sequence_step IS NOT NULL AND dry_run = 0;
+
+      CREATE UNIQUE INDEX ux_msg_step_dryrun ON messages(lead_id, sequence_step)
+        WHERE direction = 'out' AND sequence_step IS NOT NULL AND dry_run = 1;
     `)
   },
 ]
@@ -388,8 +409,12 @@ export interface MessageRow {
   created_at: number | null
   /**
    * 1 when the send went to `FileTransport` (an `.eml` on disk, nothing on the
-   * wire). Excluded from `ux_msg_step` so a dry run cannot block the real
-   * send of that step; still counted by `countSentToday`.
+   * wire).
+   *
+   * Rehearsals and real sends live in separate uniqueness namespaces
+   * (`ux_msg_step_dryrun` and `ux_msg_step`), so a dry run cannot block the
+   * real send of a step but still dedupes against other dry runs. Counted by
+   * `countSentToday` either way.
    */
   dry_run: number
 }
