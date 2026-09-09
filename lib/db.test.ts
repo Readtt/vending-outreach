@@ -177,6 +177,48 @@ test("a null osm_id never collides, so manual leads are not deduped together", (
   assert.equal(countLeads(), 2)
 })
 
+test("an empty or blank osm_id is stored as null, not as a shared identity", () => {
+  clearLeads()
+
+  // SQLite treats every NULL as distinct but two empty strings as equal, so an
+  // importer that emits "" for a way with no stable id would otherwise see
+  // every such lead collapse into the first one.
+  const a = insertLead({
+    name: "Blank A",
+    type: "cafe",
+    source: "overpass",
+    osmId: "",
+  })
+  const b = insertLead({
+    name: "Blank B",
+    type: "cafe",
+    source: "overpass",
+    osmId: "   ",
+  })
+
+  assert.equal(a.osm_id, null)
+  assert.equal(b.osm_id, null)
+  assert.notEqual(a.id, b.id)
+  assert.equal(countLeads(), 2)
+
+  // A real id is still trimmed and still dedupes.
+  const padded = insertLead({
+    name: "Padded",
+    type: "cafe",
+    source: "overpass",
+    osmId: "  node/42  ",
+  })
+  assert.equal(padded.osm_id, "node/42")
+  const again = insertLead({
+    name: "Padded again",
+    type: "cafe",
+    source: "overpass",
+    osmId: "node/42",
+  })
+  assert.equal(again.id, padded.id)
+  assert.equal(countLeads(), 3)
+})
+
 // ---------------------------------------------------------------------------
 // listLeads / countLeads
 // ---------------------------------------------------------------------------

@@ -974,7 +974,11 @@ export interface InsertLeadInput {
  */
 export function insertLead(input: InsertLeadInput): LeadRow {
   const db = getDb()
-  const osmId = input.osmId ?? null
+  // An empty or whitespace-only osm_id is "no OSM identity", not an identity
+  // that happens to be blank. SQLite treats every NULL as distinct but two
+  // empty strings as equal, so passing "" through would silently collapse
+  // every un-identified lead in an import into a single row.
+  const osmId = input.osmId?.trim() || null
   const id = randomUUID()
 
   // One statement rather than a SELECT-then-INSERT: the conflict is resolved
