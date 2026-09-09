@@ -5,12 +5,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { COUNTRIES, COUNTRY_LABELS } from "@/lib/geo"
 import { saveTargetingSettingsAction } from "./actions"
 import { LabeledRangeSlider } from "./labeled-range-slider"
+import { SettingsForm } from "./settings-form"
 import { BUSINESS_TYPES, type TargetingSettings } from "./data"
 
 export function TargetingSection({
@@ -29,9 +29,9 @@ export function TargetingSection({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form
+        <SettingsForm
           action={saveTargetingSettingsAction}
-          className="flex flex-col gap-6"
+          fieldsKey={JSON.stringify(settings)}
         >
           <div className="flex flex-col gap-2">
             <Label>Countries</Label>
@@ -96,11 +96,7 @@ export function TargetingSection({
               ))}
             </div>
           </div>
-
-          <div>
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
+        </SettingsForm>
       </CardContent>
     </Card>
   )

@@ -50,6 +50,22 @@ export const COUNTRY_ADJECTIVES: Record<Country, string> = {
   CA: "Canadian",
 }
 
+/**
+ * Names the selected countries for the middle of a sentence: "the United
+ * States", "Canada", "the United States or Canada".
+ *
+ * The article belongs to the name and not to the sentence around it, which is
+ * why this exists rather than callers writing `the ${COUNTRY_LABELS[c]}` —
+ * that is how the search error came to read "did not match anywhere in the
+ * Canada".
+ */
+export function describeCountries(countries: readonly Country[]): string {
+  const names = countries.map((c) => (c === "US" ? "the United States" : "Canada"))
+  if (names.length === 0) return "the selected countries"
+  if (names.length === 1) return names[0]
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`
+}
+
 export function isCountry(value: unknown): value is Country {
   return value === "US" || value === "CA"
 }

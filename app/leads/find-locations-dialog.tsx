@@ -257,6 +257,32 @@ export function FindLocationsDialog({
                 : ""}
             </div>
           )}
+
+          {/* Both licences require the credit, and this is the screen the
+              data is actually used on. GeoNames is what makes a Canadian
+              postal code resolve at all — OpenStreetMap does not carry them,
+              because Canada Post claims copyright over the list. */}
+          <p className="text-xs text-muted-foreground">
+            Businesses from{" "}
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              OpenStreetMap
+            </a>{" "}
+            (ODbL). Canadian postal code locations from{" "}
+            <a
+              href="https://www.geonames.org/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              GeoNames
+            </a>{" "}
+            (CC BY 4.0).
+          </p>
         </div>
 
         <DialogFooter>

@@ -16,6 +16,7 @@ import {
   clampToCountries,
   countryForPoint,
   countryFromAddress,
+  describeCountries,
   formatPhone,
   isWithinCountries,
   timezoneForPoint,
@@ -265,4 +266,25 @@ test("formatPhone hands back anything it cannot parse, untouched", () => {
   assert.equal(formatPhone("call the shop"), "call the shop")
   assert.equal(formatPhone(null), "")
   assert.equal(formatPhone(""), "")
+})
+
+// ---------------------------------------------------------------------------
+// describeCountries
+// ---------------------------------------------------------------------------
+
+test("countries are named with their own article, not the sentence's", () => {
+  // The search error used to be built as `the ${COUNTRY_LABELS[c]}`, which
+  // read "did not match anywhere in the Canada" to every Canadian user.
+  assert.equal(describeCountries(["CA"]), "Canada")
+  assert.equal(describeCountries(["US"]), "the United States")
+  assert.equal(describeCountries(["US", "CA"]), "the United States or Canada")
+  assert.equal(describeCountries(["CA", "US"]), "Canada or the United States")
+
+  for (const selection of [["CA"], ["US"], ["US", "CA"]] as const) {
+    assert.doesNotMatch(
+      `nowhere in ${describeCountries(selection)}.`,
+      /the Canada/,
+      "an article was doubled up"
+    )
+  }
 })

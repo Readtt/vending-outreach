@@ -51,17 +51,29 @@ export function RoleModelPicker({
   providers,
   initial,
 }: RoleModelPickerProps) {
-  const [providerId, setProviderId] = useState<string | undefined>(
-    initial?.providerId ?? providers[0]?.id
+  // Only what the user (or the saved setting) actually chose. Which provider
+  // is *shown* is derived below, so that adding the very first provider
+  // selects it instead of leaving the row blank until a reload — this
+  // component is keyed by role, so it does not remount when `providers`
+  // changes and initial state alone would never catch up.
+  const [pickedProviderId, setPickedProviderId] = useState<string | null>(
+    initial?.providerId ?? null
   )
   const [modelId, setModelId] = useState<string | undefined>(initial?.modelId)
   const [fetched, setFetched] = useState<FetchedModels | null>(null)
   const [, startTransition] = useTransition()
 
+  // `null`, never `undefined`, when there is nothing to select. Base UI reads
+  // `undefined` as "this Select is uncontrolled" and settles that on the
+  // first render, so a picker that began with no providers and gained one
+  // later flipped from uncontrolled to controlled and warned about it. `null`
+  // is the controlled way to say nothing is selected.
+  const providerId: string | null = pickedProviderId ?? providers[0]?.id ?? null
+
   const selectedProvider = providers.find((p) => p.id === providerId)
   const current =
     fetched && fetched.providerId === providerId ? fetched : undefined
-  const loading = providerId !== undefined && current === undefined
+  const loading = providerId !== null && current === undefined
   const models = current?.status === "ok" ? current.models : EMPTY_MODELS
   const error = current?.status === "error" ? current.message : null
 
@@ -169,7 +181,7 @@ export function RoleModelPicker({
             value={providerId}
             onValueChange={(next) => {
               if (!next) return
-              setProviderId(next)
+              setPickedProviderId(next)
               setModelId(undefined)
             }}
             disabled={providers.length === 0}

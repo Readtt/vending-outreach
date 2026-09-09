@@ -66,9 +66,19 @@ them next to the address.
 the kinds of business you want. This is where searches start from.
 
 **5. Leads, "Find businesses".** It opens on what you saved in step 4; change
-anything you like for this one search. Type a town, a ZIP code, or a postal
-code. It searches OpenStreetMap, which is free and needs no key. Add the ones
-you like.
+anything you like for this one search. Type a town ("Columbus, OH", "London,
+ON"), a ZIP code, or a Canadian postal code — `M1E 4C2`, `m1e4c2` and the bare
+`M1E` all work, and so does a whole address with the code in it. It searches
+OpenStreetMap, which is free and needs no key. Add the ones you like.
+
+Canadian postal codes are the one thing OpenStreetMap cannot answer: Canada
+Post claims copyright over the list, so Nominatim returns nothing for every
+form of them. They are resolved from `lib/ca-fsa-data.ts` instead, a table of
+all 1,652 forward sortation areas that ships with the app — no network, no key,
+nothing to be down. It is built from [GeoNames](https://www.geonames.org/)
+(CC BY 4.0) by `pnpm build:ca-fsa`, which needs running only when GeoNames
+revises the data. A postal code places you within a neighbourhood, which is as
+precise as the centre of a search measured in miles needs to be.
 
 **6. Wait a few minutes.** The engine checks for work every 60 seconds. It reads
 each business's website, writes them an email, and lines it up. Watch the

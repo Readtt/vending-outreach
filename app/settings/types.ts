@@ -34,6 +34,28 @@ export interface MailboxPublic {
   appPasswordMasked: string
 }
 
+/**
+ * What a Settings form's save came back with.
+ *
+ * The save actions return this instead of throwing, because a thrown Server
+ * Action rejects the whole form submission: React has nowhere to put the
+ * message, so a blank required field showed up as an error overlay in dev and
+ * as nothing at all in production. A returned value is something
+ * `useActionState` can render.
+ *
+ * Both outcomes carry `at`, a timestamp, rather than being distinguished by
+ * their contents alone. Saving twice with no changes in between, or failing
+ * twice the same way, has to read as two results and not one: otherwise the
+ * second "Saved" is indistinguishable from the first one still being on
+ * screen, which is the exact thing this is meant to make obvious.
+ */
+export type SaveState =
+  | { status: "idle" }
+  | { status: "saved"; at: number }
+  | { status: "error"; message: string; at: number }
+
+export const IDLE_SAVE: SaveState = { status: "idle" }
+
 export interface SettingsStatus {
   engine: EngineStatus
   /** Plain-language names of the things still to be filled in. Empty when done. */

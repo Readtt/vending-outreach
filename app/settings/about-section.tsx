@@ -5,11 +5,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { saveAboutSettingsAction } from "./actions"
+import { SettingsForm } from "./settings-form"
 import type { AboutSettings } from "./data"
 
 export function AboutSection({ settings }: { settings: AboutSettings }) {
@@ -23,7 +23,10 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={saveAboutSettingsAction} className="flex flex-col gap-4">
+        <SettingsForm
+          action={saveAboutSettingsAction}
+          fieldsKey={JSON.stringify(settings)}
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="name">Your name</Label>
@@ -102,11 +105,7 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
               better the emails read.
             </p>
           </div>
-
-          <div>
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
+        </SettingsForm>
       </CardContent>
     </Card>
   )

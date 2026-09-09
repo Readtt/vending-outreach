@@ -44,10 +44,28 @@ import {
   type SendingSettings,
   type TargetingSettings,
 } from "./data"
-import type { SettingsStatus } from "./types"
+import type { SaveState, SettingsStatus } from "./types"
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+/**
+ * The three form-backed save actions report failure by returning rather than
+ * throwing, so `useActionState` has something to render. A thrown Server
+ * Action rejects the submission itself, which put "Physical address is
+ * required" into a dev error overlay and nowhere at all in production.
+ *
+ * Only *expected* failures come back this way. An unreadable database or a
+ * disk error still throws, because those are not something a different form
+ * value would fix and the error boundary is the right place for them.
+ */
+function saved(): SaveState {
+  return { status: "saved", at: Date.now() }
+}
+
+function failed(message: string): SaveState {
+  return { status: "error", message, at: Date.now() }
 }
 
 function formString(formData: FormData, key: string): string {
@@ -178,8 +196,9 @@ export async function deleteMailboxAction(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function saveSendingSettingsAction(
+  _prev: SaveState,
   formData: FormData
-): Promise<void> {
+): Promise<SaveState> {
   const emailsPerDay = clamp(
     formNumber(formData, "emailsPerDay", DEFAULT_SENDING_SETTINGS.emailsPerDay),
     1,
@@ -230,6 +249,7 @@ export async function saveSendingSettingsAction(
   }
   saveSendingSettings(settings)
   revalidatePath("/settings")
+  return saved()
 }
 
 // ---------------------------------------------------------------------------
@@ -237,8 +257,9 @@ export async function saveSendingSettingsAction(
 // ---------------------------------------------------------------------------
 
 export async function saveTargetingSettingsAction(
+  _prev: SaveState,
   formData: FormData
-): Promise<void> {
+): Promise<SaveState> {
   const location = formString(formData, "location")
   const radiusMiles = clamp(
     formNumber(formData, "radiusMiles", DEFAULT_TARGETING_SETTINGS.radiusMiles),
@@ -268,6 +289,7 @@ export async function saveTargetingSettingsAction(
   }
   saveTargetingSettings(settings)
   revalidatePath("/settings")
+  return saved()
 }
 
 // ---------------------------------------------------------------------------
@@ -275,15 +297,18 @@ export async function saveTargetingSettingsAction(
 // ---------------------------------------------------------------------------
 
 export async function saveAboutSettingsAction(
+  _prev: SaveState,
   formData: FormData
-): Promise<void> {
+): Promise<SaveState> {
   const address = formString(formData, "address")
   if (!address) {
     // Required for CAN-SPAM — every commercial email must carry a physical
     // address. The form also marks this field `required` client-side; this
-    // is the server-side backstop.
-    throw new Error(
-      "Physical address is required (CAN-SPAM requires it on every email)."
+    // is the server-side backstop, and it is a message for the person
+    // filling the form in, so it is returned rather than thrown.
+    return failed(
+      "A postal address is required — every sales email has to carry one, " +
+        "in both countries. Nothing was saved."
     )
   }
 
@@ -298,6 +323,7 @@ export async function saveAboutSettingsAction(
   }
   saveAboutSettings(settings)
   revalidatePath("/settings")
+  return saved()
 }
 
 /**

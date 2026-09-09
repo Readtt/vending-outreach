@@ -27,7 +27,9 @@ import {
   geocodePlace,
   isWithinUs,
   MAX_RADIUS_MILES,
+  MAX_RETRIES,
   MILES_PER_DEGREE_LATITUDE,
+  OVERPASS_URLS,
   searchOverpass,
   TARGET_TYPES,
   TYPE_LABELS,
@@ -699,21 +701,75 @@ test("a 429 is retried twice and then surfaced", async () => {
       status: 429,
       headers: { "retry-after": "3" },
     })
-  const stub = stubFetch([tooMany, tooMany, tooMany])
+  // Three for the primary's full allowance, then one each for the two
+  // mirrors, all of them equally unwilling.
+  const stub = stubFetch([tooMany, tooMany, tooMany, tooMany, tooMany])
 
   await assert.rejects(
     searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn, slept)),
     (err: unknown) => {
       assert.ok(err instanceof Error)
-      assert.match(err.message, /Overpass: HTTP 429 after 3 attempt\(s\)/)
-      assert.match(err.message, /Rate limited/)
+      // The message a person reads, not the one a proxy emitted.
+      assert.match(err.message, /rate limiting/i)
+      assert.match(err.message, /Overpass/)
+      assert.ok(
+        !/<html|<!doctype/i.test(err.message),
+        `an HTML error page reached the user: ${err.message}`
+      )
       return true
     }
   )
-  assert.equal(stub.calls.length, 3, "one initial attempt plus two retries")
+  assert.equal(
+    stub.calls.length,
+    OVERPASS_URLS.length + MAX_RETRIES,
+    "three attempts at the primary, then one at each mirror"
+  )
   // Retry-After replaces the exponential backoff rather than adding to it,
-  // and nothing was actually waited on because `sleep` is injected.
+  // and nothing was actually waited on because `sleep` is injected. Only the
+  // primary retries, so only the primary sleeps.
   assert.deepEqual(slept, [3000, 3000])
+})
+
+test("a busy primary falls back to a mirror, which answers", async () => {
+  const busy = () => new Response("<html>too busy</html>", { status: 504 })
+  const stub = stubFetch([
+    busy,
+    busy,
+    busy,
+    jsonResponse({
+      elements: [
+        overpassElement(
+          { id: 77 },
+          { name: "Mirror Gym", leisure: "fitness_centre" }
+        ),
+      ],
+    }),
+  ])
+
+  const found = await searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn))
+  assert.deepEqual(
+    found.map((c) => c.name),
+    ["Mirror Gym"],
+    "a mirror should have answered what the primary could not"
+  )
+  assert.equal(stub.calls.length, 4)
+  assert.equal(stub.calls[0].url, OVERPASS_URLS[0])
+  assert.equal(
+    stub.calls[3].url,
+    OVERPASS_URLS[1],
+    "the fourth call should be the first mirror"
+  )
+})
+
+test("a mirror is not tried for a query the primary refused outright", async () => {
+  // A malformed query is malformed everywhere. Trying it on two more
+  // people's servers is just rude.
+  const stub = stubFetch([() => new Response("bad query", { status: 400 })])
+  await assert.rejects(
+    searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn)),
+    /refused the search \(HTTP 400\)/
+  )
+  assert.equal(stub.calls.length, 1, "no mirror should have been tried")
 })
 
 test("a 504 is retried, and a success on the retry is returned", async () => {
@@ -747,7 +803,7 @@ test("a non-retryable status is surfaced immediately", async () => {
   const stub = stubFetch([() => new Response("nope", { status: 400 })])
   await assert.rejects(
     searchOverpass(freshBBox(), ["gym"], US, deps(stub.fn)),
-    /Overpass: HTTP 400 after 1 attempt/
+    /Overpass refused the search \(HTTP 400\)/
   )
   assert.equal(stub.calls.length, 1)
 })
@@ -918,6 +974,103 @@ test("a Nominatim cache hit avoids a second fetch", async () => {
   const first = await geocodePlace("Seattle, WA", US, deps(stub.fn))
   const second = await geocodePlace("Seattle, WA", US, deps(forbiddenFetch))
   assert.deepEqual(second, first)
+})
+
+// ---------------------------------------------------------------------------
+// geocodePlace and Canadian postal codes
+//
+// Nominatim has no Canadian postal code data at all — the full code, the bare
+// FSA and the structured `postalcode=` parameter every one return `[]` — so
+// these come out of the bundled table instead. `forbiddenFetch` is the
+// assertion that matters in most of them: reaching the network here would
+// mean spending a second of someone else's rate limit to be told nothing.
+// ---------------------------------------------------------------------------
+
+const CA = ["CA"] as const
+const BOTH = ["US", "CA"] as const
+
+test("a Canadian postal code resolves without touching the network", async () => {
+  const result = await geocodePlace("M1E 4C2", CA, deps(forbiddenFetch))
+  assert.ok(result, '"M1E 4C2" must resolve — this is the reported bug')
+  assert.equal(result.country, "CA")
+  assert.ok(Math.abs(result.lat - 43.77) < 0.1, `latitude was ${result.lat}`)
+  assert.ok(Math.abs(result.lng - -79.19) < 0.1, `longitude was ${result.lng}`)
+  assert.match(result.displayName, /Scarborough/)
+  assert.ok(result.bbox.north > result.bbox.south)
+  assert.ok(result.bbox.east > result.bbox.west)
+})
+
+test("postal codes resolve however they are typed, and with the US also on", async () => {
+  for (const written of ["M1E 4C2", "m1e4c2", "M1E-4C2", "M1E"]) {
+    const result = await geocodePlace(written, BOTH, deps(forbiddenFetch))
+    assert.ok(result, `"${written}" should resolve`)
+    assert.ok(
+      Math.abs(result.lat - 43.77) < 0.1,
+      `"${written}" landed at ${result.lat}`
+    )
+  }
+})
+
+test("a Canadian postal code is not honoured when only the US is selected", async () => {
+  // Ticking the US alone and typing a Canadian code is a mistake worth
+  // surfacing. Quietly searching Canada would run a campaign in a country
+  // the user did not choose — and under the wrong compliance regime.
+  const stub = stubFetch([jsonResponse([])])
+  const result = await geocodePlace("M1E 4C2", US, deps(stub.fn))
+  assert.equal(result, undefined)
+  assert.equal(stub.calls.length, 1, "it should have asked Nominatim instead")
+})
+
+test("a postal code pasted inside an address is recovered after Nominatim fails", async () => {
+  // Nominatim rejects the whole string rather than the postal code in it.
+  const stub = stubFetch([jsonResponse([])])
+  const result = await geocodePlace(
+    "123 Main St, Scarborough, ON, M1E 4C2",
+    CA,
+    deps(stub.fn)
+  )
+  assert.ok(result, "the postal code in the string should have been used")
+  assert.equal(result.country, "CA")
+  assert.ok(Math.abs(result.lat - 43.77) < 0.1)
+  assert.equal(stub.calls.length, 1, "Nominatim gets first refusal here")
+})
+
+test("a Canadian town still goes to Nominatim, which places it better", async () => {
+  const stub = stubFetch([
+    jsonResponse([
+      {
+        lat: "42.9849",
+        lon: "-81.2453",
+        display_name: "London, Ontario, Canada",
+        boundingbox: ["42.83", "43.07", "-81.39", "-81.14"],
+        address: { country_code: "ca" },
+      },
+    ]),
+  ])
+  const result = await geocodePlace("London, ON", CA, deps(stub.fn))
+  assert.ok(result)
+  assert.equal(result.country, "CA")
+  assert.match(result.displayName, /London/)
+  assert.equal(stub.calls.length, 1)
+  assert.equal(new URL(stub.calls[0].url).searchParams.get("countrycodes"), "ca")
+})
+
+test("a US ZIP is unaffected by any of this", async () => {
+  const stub = stubFetch([
+    jsonResponse([
+      {
+        lat: "39.9707",
+        lon: "-83.0037",
+        display_name: "43215, Columbus, Franklin County, Ohio, United States",
+        boundingbox: ["39.94", "40.00", "-83.03", "-82.97"],
+        address: { country_code: "us" },
+      },
+    ]),
+  ])
+  const result = await geocodePlace("43215", BOTH, deps(stub.fn))
+  assert.ok(result)
+  assert.equal(result.country, "US")
+  assert.equal(stub.calls.length, 1, "ZIPs still go to Nominatim")
 })
 
 // ---------------------------------------------------------------------------

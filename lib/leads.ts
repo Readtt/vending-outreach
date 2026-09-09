@@ -79,7 +79,8 @@ import {
   type LeadType,
   type OsmCandidate,
 } from "./osm.ts"
-import { COUNTRY_LABELS, timezoneForPoint, type Country } from "./geo.ts"
+import { describeCountries, timezoneForPoint, type Country } from "./geo.ts"
+import { parsePostalCode } from "./ca-postal.ts"
 
 // ---------------------------------------------------------------------------
 // Deps
@@ -1433,6 +1434,37 @@ function dedupeWithinBatch(
 }
 
 /**
+ * Why nothing matched, said in terms of what the user actually typed.
+ *
+ * The generic version of this message ("did not match anywhere") sent people
+ * to re-type a postal code that was never going to work, so the two cases
+ * worth telling apart get their own sentence: a Canadian postal code with
+ * Canada unticked, and a well-formed code that Canada Post has not issued.
+ */
+function noMatchError(place: string, countries: readonly Country[]): Error {
+  const looksCanadian = parsePostalCode(place) !== undefined
+
+  if (looksCanadian && !countries.includes("CA")) {
+    return new Error(
+      `"${place}" is a Canadian postal code, and this search is set to ` +
+        `${describeCountries(countries)} only. Tick Canada to use it.`
+    )
+  }
+  if (looksCanadian) {
+    return new Error(
+      `"${place}" is shaped like a Canadian postal code but there is no such ` +
+        "postal area. Check the first three characters, or search for the town."
+    )
+  }
+
+  return new Error(
+    `"${place}" did not match anywhere in ${describeCountries(countries)}. ` +
+      "Try a town with its state or province — Columbus, OH or London, ON — " +
+      "or a ZIP or postal code."
+  )
+}
+
+/**
  * Finds candidate businesses for a place or a coordinate.
  *
  * The bbox is clamped to the selected countries before any query is issued: a
@@ -1478,15 +1510,7 @@ export async function findLocations(
   if (hasPlace) {
     const place = params.place as string
     const geocoded = await geocodePlace(place, params.countries, osmDeps)
-    if (!geocoded) {
-      const where = params.countries
-        .map((c) => COUNTRY_LABELS[c])
-        .join(" or the ")
-      throw new Error(
-        `findLocations: "${place}" did not match anywhere in the ${where}. ` +
-          "Try a town and its state or province, a ZIP code, or a postal code."
-      )
-    }
+    if (!geocoded) throw noMatchError(place, params.countries)
     lat = geocoded.lat
     lng = geocoded.lng
     resolvedPlace = geocoded.displayName
@@ -1497,9 +1521,29 @@ export async function findLocations(
 
   const requested = bboxAround(lat, lng, params.radiusMiles)
   const clamped = !isWithinCountries(requested, params.countries)
-  const bbox = clamped
-    ? clampToCountries(requested, params.countries)
-    : requested
+  let bbox: BBox
+  if (!clamped) {
+    bbox = requested
+  } else {
+    try {
+      bbox = clampToCountries(requested, params.countries)
+    } catch {
+      // `clampToCountries` throws when the box overlaps none of the country
+      // strips, and those strips deliberately leave a gap either side of the
+      // border (see `lib/geo.ts`). Windsor is the case that bites: it sits
+      // *south* of Detroit, so no band of latitude can hold one without the
+      // other, and it falls in the gap. The raw error talks about GDPR and
+      // bounding boxes, which is not a thing to show someone who typed the
+      // name of their own city.
+      const where = resolvedPlace ?? params.place ?? `${lat}, ${lng}`
+      throw new Error(
+        `${where} sits in the strip either side of the Canada–US border that ` +
+          "this app leaves out on purpose, because a search there cannot tell " +
+          "the two countries apart and the email rules differ. Search a nearby " +
+          "town further from the border instead."
+      )
+    }
+  }
 
   const found = await searchOverpass(
     bbox,

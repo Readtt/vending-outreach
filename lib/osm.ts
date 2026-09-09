@@ -25,6 +25,12 @@
 
 import { createHash } from "node:crypto"
 
+import {
+  describeFsa,
+  locateCanadianPostalCode,
+  locateEmbeddedPostalCode,
+  type FsaLocation,
+} from "./ca-postal.ts"
 import { getCachedFetch, logEvent, setCachedFetch } from "./db.ts"
 import {
   assertValidBBox,
@@ -236,6 +242,28 @@ function resolveDeps(deps: OsmDeps = {}): ResolvedDeps {
 export const OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 export const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
+/**
+ * Overpass instances, in the order they are tried.
+ *
+ * The main instance answers a 15-mile all-types query in a few seconds when
+ * it is quiet and returns HTTP 504 when it is not, which it often is — that
+ * is what donated capacity looks like, and it turned "find businesses near
+ * me" into a dead end at busy times of day. These mirrors run the same
+ * software over the same planet data, so a query that one cannot serve right
+ * now another usually can.
+ *
+ * This does not buy extra budget to be rude with: the concurrency-1 chain is
+ * shared across all of them, the primary keeps the whole retry allowance, and
+ * a mirror gets a single attempt before moving on. Responses are cached
+ * against the query rather than the URL, so a mirror's answer spares every
+ * instance the repeat.
+ */
+export const OVERPASS_URLS: readonly string[] = [
+  OVERPASS_URL,
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+]
+
 export const OVERPASS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 export const NOMINATIM_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -247,7 +275,8 @@ const NOMINATIM_MIN_INTERVAL_MS = 1000
 
 /** Statuses worth retrying: 429 is "slow down", 504 is "the query was big". */
 const RETRY_STATUSES = new Set([429, 504])
-const MAX_RETRIES = 2
+/** Retries at the primary instance, on top of the first attempt. */
+export const MAX_RETRIES = 2
 const RETRY_BASE_MS = 2000
 const RETRY_CAP_MS = 60_000
 
@@ -320,35 +349,78 @@ interface RequestSpec {
   /** POST body, or undefined for a GET. Part of the cache key either way. */
   body?: string
   timeoutMs: number
+  /**
+   * Instances to fall back to, tried in order after `url` has used up its
+   * retries. One attempt each. Omitted for Nominatim, which has no mirror
+   * worth the name and a rate limit to respect.
+   */
+  fallbackUrls?: readonly string[]
+  /**
+   * What to hash for the cache instead of the URL. Set for Overpass so that
+   * an answer from a mirror is reused whichever instance is tried next time
+   * — otherwise falling back would quietly halve the cache hit rate.
+   */
+  cacheUrl?: string
+}
+
+/** True for the statuses that mean "this instance is busy", not "you are wrong". */
+function isBusyStatus(status: number): boolean {
+  return RETRY_STATUSES.has(status) || status === 502 || status === 503
 }
 
 /**
- * One HTTP round trip with a timeout and a bounded retry on 429/504.
+ * Turns an upstream failure into something worth showing a person.
  *
- * Retries are capped at two and exponential, and the error thrown after that
- * says which upstream refused and how many attempts were made. The
- * alternative — an unbounded retry against donated capacity — is how an IP
- * range gets blocked for every user of the software.
+ * The bodies these services return on a bad day are HTML error pages, and
+ * pasting one into the UI — which is where this ends up — told the user
+ * nothing except that something had gone wrong in a language they did not
+ * ask to read.
  */
-async function requestWithRetry(
+function upstreamError(label: string, status: number, body: string): Error {
+  const looksLikeHtml = /^\s*<(?:!doctype|html|\?xml)/i.test(body)
+  const detail = looksLikeHtml ? "" : body.trim().slice(0, 200)
+
+  if (status === 429) {
+    return new Error(
+      `${label} is rate limiting this computer. It is a free shared service — ` +
+        "wait a few minutes and try again."
+    )
+  }
+  if (isBusyStatus(status)) {
+    return new Error(
+      `${label} is too busy to answer right now (HTTP ${status}). It is free ` +
+        "shared capacity and this happens at peak times. Try again in a few " +
+        "minutes, or search a smaller radius or fewer kinds of business."
+    )
+  }
+  return new Error(
+    `${label} refused the search (HTTP ${status}).` + (detail ? ` ${detail}` : "")
+  )
+}
+
+/**
+ * One instance, with a timeout and a bounded retry on 429/504.
+ *
+ * Retries are capped and exponential. The alternative — an unbounded retry
+ * against donated capacity — is how an IP range gets blocked for every user
+ * of the software.
+ */
+async function requestOneInstance(
   spec: RequestSpec,
+  url: string,
+  maxAttempts: number,
   deps: ResolvedDeps
 ): Promise<string> {
-  const maxAttempts = MAX_RETRIES + 1
-  let lastStatus = 0
-  let lastBody = ""
-  let attemptsMade = 0
   let nextDelayMs = 0
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (nextDelayMs > 0) await deps.sleep(nextDelayMs)
-    attemptsMade = attempt
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), spec.timeoutMs)
     let res: Response
     try {
-      res = await deps.fetch(spec.url, {
+      res = await deps.fetch(url, {
         method: spec.body === undefined ? "GET" : "POST",
         headers: {
           "User-Agent": userAgent(),
@@ -364,7 +436,8 @@ async function requestWithRetry(
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         throw new Error(
-          `${spec.label}: timed out after ${spec.timeoutMs / 1000}s`
+          `${spec.label} took longer than ${spec.timeoutMs / 1000}s to answer. ` +
+            "Try a smaller radius or fewer kinds of business."
         )
       }
       throw err
@@ -374,10 +447,10 @@ async function requestWithRetry(
 
     if (res.ok) return await res.text()
 
-    lastStatus = res.status
-    lastBody = (await res.text().catch(() => "")).slice(0, 300)
-
-    if (!RETRY_STATUSES.has(res.status) || attempt === maxAttempts) break
+    const body = (await res.text().catch(() => "")).slice(0, 300)
+    if (!RETRY_STATUSES.has(res.status) || attempt === maxAttempts) {
+      throw upstreamError(spec.label, res.status, body)
+    }
 
     // `Retry-After` replaces the exponential backoff rather than adding to
     // it. The server has told us how long it wants; waiting its interval AND
@@ -387,10 +460,70 @@ async function requestWithRetry(
       Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_CAP_MS)
   }
 
-  throw new Error(
-    `${spec.label}: HTTP ${lastStatus} after ${attemptsMade} attempt(s). ` +
-      `${lastStatus === 429 ? "Rate limited — back off rather than retrying further. " : ""}` +
-      (lastBody ? `Response: ${lastBody}` : "")
+  // Unreachable: the loop either returns or throws on its last attempt.
+  throw new Error(`${spec.label}: exhausted every attempt`)
+}
+
+/**
+ * The request, across every instance that might answer it.
+ *
+ * The primary keeps the full retry allowance; each fallback gets one attempt,
+ * because a mirror that is also busy should be found out quickly rather than
+ * add another two backoffs to a user already waiting. Only a "this instance
+ * is busy" failure moves on — a malformed query is going to be malformed
+ * everywhere, and trying it three more times would just be rude.
+ *
+ * The error raised is the *first* one, from the primary. That is the instance
+ * whose behaviour is worth reporting; "the third mirror was also busy" is not
+ * the useful half of the story.
+ */
+async function requestWithRetry(
+  spec: RequestSpec,
+  deps: ResolvedDeps
+): Promise<string> {
+  const urls = [spec.url, ...(spec.fallbackUrls ?? [])]
+  let firstError: unknown
+
+  for (let i = 0; i < urls.length; i++) {
+    const isPrimary = i === 0
+    try {
+      return await requestOneInstance(
+        spec,
+        urls[i],
+        isPrimary ? MAX_RETRIES + 1 : 1,
+        deps
+      )
+    } catch (err) {
+      if (isPrimary) firstError = err
+      const last = i === urls.length - 1
+      if (last || !worthAnotherInstance(err)) throw firstError ?? err
+      logEvent("osm.fallback", {
+        detail: {
+          label: spec.label,
+          from: urls[i],
+          to: urls[i + 1],
+          because: err instanceof Error ? err.message.slice(0, 200) : String(err),
+        },
+      })
+    }
+  }
+
+  throw firstError ?? new Error(`${spec.label}: no instance answered`)
+}
+
+/**
+ * Whether a failure is the kind another instance might not have.
+ *
+ * Busy and timed out, yes. A refused or malformed query, no — the mirrors run
+ * the same software and would refuse it the same way.
+ */
+function worthAnotherInstance(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  return (
+    /too busy|rate limiting|took longer than/i.test(err.message) ||
+    // A DNS failure, a dropped connection, a TLS error: this instance is
+    // unreachable from here, which says nothing about the next one.
+    err.name === "TypeError"
   )
 }
 
@@ -405,7 +538,9 @@ async function cachedRequest(
   deps: ResolvedDeps,
   runSerialized: (job: () => Promise<string>) => Promise<string>
 ): Promise<string> {
-  const key = cacheKey(spec.url, spec.body ?? "")
+  // `cacheUrl` where the caller set one, so an Overpass answer is keyed on
+  // the query rather than on whichever instance happened to serve it.
+  const key = cacheKey(spec.cacheUrl ?? spec.url, spec.body ?? "")
   const cached = getCachedFetch(key, ttlMs)
   if (cached) return cached.response_json
 
@@ -617,7 +752,11 @@ export async function searchOverpass(
   const raw = await cachedRequest(
     {
       label: "Overpass",
-      url: OVERPASS_URL,
+      url: OVERPASS_URLS[0],
+      fallbackUrls: OVERPASS_URLS.slice(1),
+      // Keyed on the canonical URL whichever instance answers, so the cache
+      // does not fragment across mirrors.
+      cacheUrl: OVERPASS_URL,
       body,
       timeoutMs: OVERPASS_TIMEOUT_MS,
     },
@@ -761,9 +900,24 @@ function parseNominatimBBox(value: unknown): BBox | undefined {
   return { south, north, west, east }
 }
 
+/** An FSA hit dressed as a geocode result. See `fromCanadianPostalCode`. */
+function fsaResult(location: FsaLocation): GeocodeResult {
+  return {
+    lat: location.lat,
+    lng: location.lng,
+    displayName: describeFsa(location),
+    // An FSA is about a neighbourhood. Five miles matches what this function
+    // already falls back to when Nominatim returns a point with no box, and
+    // the box is informational anyway — `findLocations` builds its own from
+    // the point and the radius the user chose.
+    bbox: bboxAround(location.lat, location.lng, 5),
+    country: "CA",
+  }
+}
+
 /**
- * Geocodes a free-text place ("Columbus, OH", "London, ON", "43215", "K1A
- * 0B1") to a point, a box, and the country it landed in.
+ * Geocodes a free-text place ("Columbus, OH", "London, ON", "43215", "M1E
+ * 4C2") to a point, a box, and the country it landed in.
  *
  * `countrycodes` is not a nicety: without it "London" resolves to England,
  * and a UK bbox puts the campaign under GDPR and PECR. It is also what makes
@@ -772,6 +926,18 @@ function parseNominatimBBox(value: unknown): BBox | undefined {
  *
  * `addressdetails=1` costs nothing extra and buys the authoritative answer to
  * "which country is this", which beats anything the bounding strips can say.
+ *
+ * ### Canadian postal codes never reach Nominatim
+ *
+ * They cannot be answered there — Canada Post asserts copyright over the
+ * postal code database, so OSM does not carry it and Nominatim returns an
+ * empty array for the full code, the bare FSA, and the structured
+ * `postalcode=` parameter alike. They are resolved from the table in
+ * `lib/ca-postal.ts` instead, before the request rather than after it: asking
+ * anyway would spend a second of someone else's rate limit to be told
+ * nothing. A postal code *inside* a longer string is tried the other way
+ * round, after Nominatim has had its go, because there the rest of the string
+ * is usually a town Nominatim can place more precisely.
  *
  * Returns `undefined` for no match, which is a normal outcome for a typo and
  * not an error worth throwing over.
@@ -789,6 +955,15 @@ export async function geocodePlace(
     throw new Error("geocodePlace: no countries were selected")
   }
   const resolved = resolveDeps(deps)
+
+  // Only when Canada is actually selected: a Canadian postal code typed into
+  // a US-only search is a mistake worth surfacing, not one to quietly honour
+  // by searching a country the user did not tick.
+  const canadaSelected = countries.includes("CA")
+  if (canadaSelected) {
+    const exact = locateCanadianPostalCode(trimmed)
+    if (exact) return fsaResult(exact)
+  }
 
   const url = `${NOMINATIM_URL}?${new URLSearchParams({
     q: trimmed,
@@ -824,7 +999,17 @@ export async function geocodePlace(
   } catch {
     throw new Error("Nominatim: response was not JSON")
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) return undefined
+  // "Toronto, ON M1E 4C2" and "123 Main St, Scarborough, ON, M1E 4C2" are
+  // what an address paste looks like, and Nominatim rejects the whole string
+  // rather than the postal code in it. Recovering the code beats making
+  // someone work out which part it disliked.
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    if (canadaSelected) {
+      const embedded = locateEmbeddedPostalCode(trimmed)
+      if (embedded) return fsaResult(embedded)
+    }
+    return undefined
+  }
 
   const first = parsed[0] as NominatimResult
   const lat = Number(first.lat)

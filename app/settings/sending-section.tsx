@@ -5,11 +5,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { saveSendingSettingsAction } from "./actions"
 import { LabeledRangeSlider } from "./labeled-range-slider"
+import { SettingsForm } from "./settings-form"
 import { EMAILS_PER_DAY_WARN_ABOVE, type SendingSettings } from "./data"
 
 export function SendingSection({ settings }: { settings: SendingSettings }) {
@@ -24,9 +24,9 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form
+        <SettingsForm
           action={saveSendingSettingsAction}
-          className="flex flex-col gap-6"
+          fieldsKey={JSON.stringify(settings)}
         >
           <LabeledRangeSlider
             name="emailsPerDay"
@@ -70,10 +70,7 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
               defaultChecked={settings.weekdaysOnly}
             />
           </div>
-          <div>
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
+        </SettingsForm>
       </CardContent>
     </Card>
   )
