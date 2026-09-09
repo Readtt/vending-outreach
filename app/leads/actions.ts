@@ -8,7 +8,15 @@
  */
 
 import { revalidatePath } from "next/cache"
-import { enqueue, getLeadById, listMessagesForLead, listRecentEvents } from "@/lib/db"
+import {
+  countLeads,
+  enqueue,
+  getLeadById,
+  listLeads,
+  listMessagesForLead,
+  listRecentEvents,
+  updateLead,
+} from "@/lib/db"
 import { findLocations, importCandidates } from "@/lib/leads"
 import { TARGET_TYPES, type LeadType, type OsmCandidate } from "@/lib/osm"
 import { humanizeEvent } from "../humanize-event"
@@ -45,7 +53,9 @@ export async function findLocationsAction(
     totalFound: result.totalFound,
     newCount: result.newCount,
     clamped: result.clamped,
-    ...(result.resolvedPlace !== undefined ? { resolvedPlace: result.resolvedPlace } : {}),
+    ...(result.resolvedPlace !== undefined
+      ? { resolvedPlace: result.resolvedPlace }
+      : {}),
     candidates: result.candidates,
   }
 }
@@ -78,7 +88,9 @@ export async function importLeadsAction(
   return { inserted: result.inserted, skipped: result.skipped }
 }
 
-export async function getLeadDetailAction(id: string): Promise<LeadDetail | null> {
+export async function getLeadDetailAction(
+  id: string
+): Promise<LeadDetail | null> {
   const lead = getLeadById(id)
   if (!lead) return null
 
@@ -118,4 +130,45 @@ export async function getLeadDetailAction(id: string): Promise<LeadDetail | null
     messages,
     events,
   }
+}
+
+/**
+ * Releases a held draft so the engine may send it.
+ *
+ * The first `APPROVAL_QUEUE_SIZE` leads are enriched and composed but parked
+ * at `held` (spec 9.2) so the template gets read before hundreds of businesses
+ * see it. The send handler defers a held lead's task an hour at a time,
+ * forever, and refunds the attempt so it never dead-letters — it waits for
+ * exactly this call. Until it existed, the first twenty leads could never
+ * send and nothing said why.
+ *
+ * No new task is enqueued: the send task already exists and is waiting.
+ */
+export async function approveLeadAction(id: string): Promise<void> {
+  const lead = getLeadById(id)
+  if (!lead) throw new Error("That lead no longer exists.")
+  if (lead.status !== "held") {
+    // Not an error worth throwing over — two clicks on the same row, or an
+    // approve-all that already covered it.
+    return
+  }
+  updateLead(id, { status: "ready" })
+  revalidatePath("/leads")
+  revalidatePath("/")
+}
+
+/** Approves every held draft at once, for when the batch reads well. */
+export async function approveAllHeldAction(): Promise<{ approved: number }> {
+  const held = listLeads({ status: ["held"], limit: 500 })
+  for (const lead of held) {
+    updateLead(lead.id, { status: "ready" })
+  }
+  revalidatePath("/leads")
+  revalidatePath("/")
+  return { approved: held.length }
+}
+
+/** How many drafts are parked waiting for a human. Drives the review banner. */
+export async function countHeldAction(): Promise<number> {
+  return countLeads({ status: ["held"] })
 }

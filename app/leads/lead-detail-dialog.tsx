@@ -1,7 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useTransition } from "react"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -9,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { getLeadDetailAction } from "./actions"
+import { approveLeadAction, getLeadDetailAction } from "./actions"
 import {
   formatDateTime,
   LEAD_STATUS_BADGE_VARIANT,
@@ -34,10 +36,16 @@ type FetchedDetail =
   | { leadId: string; status: "ok"; detail: LeadDetail }
   | { leadId: string; status: "error"; message: string }
 
-export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps) {
+export function LeadDetailDialog({
+  leadId,
+  onOpenChange,
+}: LeadDetailDialogProps) {
   const [fetched, setFetched] = useState<FetchedDetail | null>(null)
+  const [approving, startApproving] = useTransition()
+  const [approved, setApproved] = useState<string | null>(null)
 
-  const current = fetched && leadId && fetched.leadId === leadId ? fetched : undefined
+  const current =
+    fetched && leadId && fetched.leadId === leadId ? fetched : undefined
   const loading = leadId !== null && current === undefined
   const detail = current?.status === "ok" ? current.detail : null
   const error = current?.status === "error" ? current.message : null
@@ -51,7 +59,11 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
         setFetched(
           result
             ? { leadId, status: "ok", detail: result }
-            : { leadId, status: "error", message: "This lead no longer exists." }
+            : {
+                leadId,
+                status: "error",
+                message: "This lead no longer exists.",
+              }
         )
       })
       .catch((err: unknown) => {
@@ -59,7 +71,8 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
         setFetched({
           leadId,
           status: "error",
-          message: err instanceof Error ? err.message : "Failed to load this lead.",
+          message:
+            err instanceof Error ? err.message : "Failed to load this lead.",
         })
       })
     return () => {
@@ -71,9 +84,13 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
     <Dialog open={leadId !== null} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         {loading && !detail && (
-          <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            Loading…
+          </p>
         )}
-        {error && <p className="py-8 text-center text-sm text-destructive">{error}</p>}
+        {error && (
+          <p className="py-8 text-center text-sm text-destructive">{error}</p>
+        )}
         {detail && (
           <>
             <DialogHeader>
@@ -124,10 +141,58 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
                 </div>
               )}
 
+              {(detail.status === "held" || approved === detail.id) && (
+                <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+                  {approved === detail.id ? (
+                    <p className="text-sm text-muted-foreground">
+                      Approved. It will go out on the normal schedule.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium">
+                        Waiting for your approval
+                      </p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">
+                        The draft below is written and queued, but nothing sends
+                        until you release it.
+                      </p>
+                      <Button
+                        size="sm"
+                        className="mt-2.5"
+                        disabled={approving}
+                        onClick={() => {
+                          const id = detail.id
+                          startApproving(() => {
+                            approveLeadAction(id)
+                              .then(() => {
+                                setApproved(id)
+                                toast.success(
+                                  "Approved — it will send on schedule."
+                                )
+                              })
+                              .catch((err: unknown) =>
+                                toast.error(
+                                  err instanceof Error
+                                    ? err.message
+                                    : "Could not approve."
+                                )
+                              )
+                          })
+                        }}
+                      >
+                        {approving ? "Approving…" : "Approve and send"}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div>
                 <h3 className="text-sm font-medium">Message thread</h3>
                 {detail.messages.length === 0 ? (
-                  <p className="mt-1 text-sm text-muted-foreground">No messages yet.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    No messages yet.
+                  </p>
                 ) : (
                   <div className="mt-2 flex flex-col gap-2">
                     {detail.messages.map((m) => (
@@ -146,8 +211,12 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
                           </span>
                           <span>{formatDateTime(m.sentAt ?? m.createdAt)}</span>
                         </div>
-                        {m.subject && <div className="mt-1 font-medium">{m.subject}</div>}
-                        {m.body && <p className="mt-1 whitespace-pre-wrap">{m.body}</p>}
+                        {m.subject && (
+                          <div className="mt-1 font-medium">{m.subject}</div>
+                        )}
+                        {m.body && (
+                          <p className="mt-1 whitespace-pre-wrap">{m.body}</p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -157,7 +226,9 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
               <div>
                 <h3 className="text-sm font-medium">Activity</h3>
                 {detail.events.length === 0 ? (
-                  <p className="mt-1 text-sm text-muted-foreground">Nothing logged yet.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Nothing logged yet.
+                  </p>
                 ) : (
                   <div className="mt-2 flex flex-col divide-y divide-border">
                     {detail.events.map((e) => (
@@ -167,7 +238,12 @@ export function LeadDetailDialog({ leadId, onOpenChange }: LeadDetailDialogProps
                       >
                         <span>
                           {e.text}
-                          {e.extra && <span className="text-muted-foreground"> — {e.extra}</span>}
+                          {e.extra && (
+                            <span className="text-muted-foreground">
+                              {" "}
+                              — {e.extra}
+                            </span>
+                          )}
                         </span>
                         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                           {formatDateTime(e.createdAt)}
