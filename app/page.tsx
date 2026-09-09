@@ -1,19 +1,17 @@
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 
-export default function Page() {
+export default function DashboardPage() {
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
-        </div>
-        <div className="font-mono text-xs text-muted-foreground">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
-      </div>
+    <div className="mx-auto max-w-3xl px-6 py-10">
+      <h1 className="text-lg font-medium">Dashboard</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Sending activity and pipeline overview. Not built yet — start in
+        Settings: add an AI provider, a mailbox, and your CAN-SPAM address.
+      </p>
+      <Button render={<Link href="/settings" />} className="mt-4" size="sm">
+        Go to Settings
+      </Button>
     </div>
   )
 }

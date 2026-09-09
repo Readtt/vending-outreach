@@ -34,3 +34,12 @@ pnpm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# dry-run outbox — .eml files written instead of sending
+/outbox-dryrun/
+
+# engine kill switch (spec §1)
+/STOP
+
+# subagent-driven-development scratch
+/.superpowers/
