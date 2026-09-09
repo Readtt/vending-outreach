@@ -1465,3 +1465,44 @@ export function dashboardStats(
     totalLeads: Object.values(byStatus).reduce((a, b) => a + b, 0),
   }
 }
+
+export interface TaskQueueSummary {
+  pending: number
+  running: number
+  failed: number
+  /** Pending + running, per kind. */
+  byKind: Record<string, number>
+}
+
+/**
+ * What the engine still has to do.
+ *
+ * The dashboard needs this because the tick interval is 60 seconds: without a
+ * visible queue depth, importing 200 leads looks like nothing happened, and a
+ * working system reads as a broken one. `failed` is the dead-letter count —
+ * tasks that exhausted their retries and will never run again, which is
+ * otherwise invisible until someone goes looking.
+ */
+export function taskQueueSummary(): TaskQueueSummary {
+  const db = getDb()
+  const rows = db
+    .prepare(`SELECT status, kind, count(*) AS n FROM tasks GROUP BY status, kind`)
+    .all() as unknown as { status: string; kind: string; n: number }[]
+
+  const summary: TaskQueueSummary = {
+    pending: 0,
+    running: 0,
+    failed: 0,
+    byKind: {},
+  }
+  for (const row of rows) {
+    const n = Number(row.n)
+    if (row.status === "pending") summary.pending += n
+    else if (row.status === "running") summary.running += n
+    else if (row.status === "failed") summary.failed += n
+    if (row.status === "pending" || row.status === "running") {
+      summary.byKind[row.kind] = (summary.byKind[row.kind] ?? 0) + n
+    }
+  }
+  return summary
+}
