@@ -14,8 +14,12 @@ test("expandSpintax: resolves every {a|b|c} group and leaves no braces behind", 
   for (let i = 0; i < 25; i++) {
     const result = expandSpintax(text)
     assert.ok(!/[{}]/.test(result), `left braces in: ${result}`)
-    assert.ok(result === "Hi there, this is a test." || result === "Hi there, just testing." ||
-      result === "Hello there, this is a test." || result === "Hello there, just testing.")
+    assert.ok(
+      result === "Hi there, this is a test." ||
+        result === "Hi there, just testing." ||
+        result === "Hello there, this is a test." ||
+        result === "Hello there, just testing."
+    )
   }
 })
 
@@ -31,14 +35,20 @@ test("expandSpintax: supports nesting", () => {
 })
 
 test("expandSpintax: text with no spintax passes through unchanged", () => {
-  assert.strictEqual(expandSpintax("plain text, no braces"), "plain text, no braces")
+  assert.strictEqual(
+    expandSpintax("plain text, no braces"),
+    "plain text, no braces"
+  )
 })
 
 test("fillTemplate: substitutes %%token%% and leaves unknown tokens untouched", () => {
-  const result = fillTemplate("Hi %%name%%, from %%company%%. Unknown: %%missing%%.", {
-    name: "Alex",
-    company: "Acme",
-  })
+  const result = fillTemplate(
+    "Hi %%name%%, from %%company%%. Unknown: %%missing%%.",
+    {
+      name: "Alex",
+      company: "Acme",
+    }
+  )
   assert.strictEqual(result, "Hi Alex, from Acme. Unknown: %%missing%%.")
 })
 
@@ -52,7 +62,10 @@ test("fillTemplate and expandSpintax do not corrupt each other regardless of ord
   for (const result of [spinFirst, fillFirst]) {
     assert.ok(!/[{}]/.test(result), `left spintax braces in: ${result}`)
     assert.ok(!result.includes("%%"), `left an unresolved token in: ${result}`)
-    assert.ok(result.includes("Alex"), `dropped the interpolated name: ${result}`)
+    assert.ok(
+      result.includes("Alex"),
+      `dropped the interpolated name: ${result}`
+    )
   }
 })
 
@@ -68,7 +81,10 @@ test("renderFixedReply: send_more_info includes the sender's identity and addres
   assert.ok(rendered.includes(sender.company))
   assert.ok(rendered.includes(sender.address))
   assert.ok(!/[{}]/.test(rendered), `left spintax braces in: ${rendered}`)
-  assert.ok(!rendered.includes("%%"), `left an unresolved token in: ${rendered}`)
+  assert.ok(
+    !rendered.includes("%%"),
+    `left an unresolved token in: ${rendered}`
+  )
   // The whole point of FIXED_REPLY_TEMPLATES: verify the source is a literal
   // string, not something that could plausibly call out to a model.
   assert.strictEqual(typeof FIXED_REPLY_TEMPLATES.send_more_info, "string")

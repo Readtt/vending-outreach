@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button"
 export function PrintButton() {
   return (
     <div className="mb-8 flex items-center justify-between gap-3 print:hidden">
-      <p className="text-xs text-neutral-500">Press Ctrl+P (or Cmd+P), or use the button.</p>
+      <p className="text-xs text-neutral-500">
+        Press Ctrl+P (or Cmd+P), or use the button.
+      </p>
       <Button size="sm" onClick={() => window.print()}>
         Print
       </Button>

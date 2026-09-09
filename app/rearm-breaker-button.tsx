@@ -25,7 +25,12 @@ export function RearmBreakerButton() {
   if (confirming) {
     return (
       <div className="flex items-center gap-1.5">
-        <Button variant="destructive" size="sm" onClick={handleRearm} disabled={isPending}>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={handleRearm}
+          disabled={isPending}
+        >
           {isPending ? "Re-arming…" : "Confirm re-arm"}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>

@@ -86,7 +86,9 @@ export interface SendPayload {
   body: string
 }
 
-export function parseSendPayload(payloadJson: string | null): SendPayload | null {
+export function parseSendPayload(
+  payloadJson: string | null
+): SendPayload | null {
   const raw = parsePayload(payloadJson) as {
     step?: unknown
     subject?: unknown
@@ -162,7 +164,8 @@ export function selectMailbox(
 
     reasons.push(`${mailbox.email}: ${gate.code} (${gate.reason})`)
     if (gate.retryAt !== null) {
-      soonest = soonest === null ? gate.retryAt : Math.min(soonest, gate.retryAt)
+      soonest =
+        soonest === null ? gate.retryAt : Math.min(soonest, gate.retryAt)
     }
   }
 
@@ -222,7 +225,8 @@ export async function handleSend(
   if (!lead) return deadLetter(`lead ${leadId} no longer exists`)
 
   const email = lead.email?.trim() ?? ""
-  if (email.length === 0) return deadLetter(`lead ${leadId} has no email address`)
+  if (email.length === 0)
+    return deadLetter(`lead ${leadId} has no email address`)
 
   // --- 1. Suppression, re-checked here (spec §7, TOCTOU) -------------------
   // `sendMessage` re-checks it again inside the same transaction as the

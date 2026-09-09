@@ -1,6 +1,11 @@
 "use client"
 
-import { useState, useTransition, type ComponentProps, type FormEvent } from "react"
+import {
+  useState,
+  useTransition,
+  type ComponentProps,
+  type FormEvent,
+} from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import {
@@ -36,14 +41,21 @@ import { deleteProviderAction, saveProviderAction } from "./actions"
 import { defaultLabelForKind, type ProviderPublic } from "./types"
 import { RoleModelPicker } from "./role-model-picker"
 
-const PROVIDER_KINDS: ProviderKind[] = ["anthropic", "google", "openai_compatible"]
+const PROVIDER_KINDS: ProviderKind[] = [
+  "anthropic",
+  "google",
+  "openai_compatible",
+]
 
 interface ProvidersSectionProps {
   providers: ProviderPublic[]
   roleModels: Record<AiRole, RoleModelSetting | null>
 }
 
-export function ProvidersSection({ providers, roleModels }: ProvidersSectionProps) {
+export function ProvidersSection({
+  providers,
+  roleModels,
+}: ProvidersSectionProps) {
   return (
     <div className="flex flex-col gap-6">
       <Card>
@@ -73,8 +85,8 @@ export function ProvidersSection({ providers, roleModels }: ProvidersSectionProp
         <CardHeader>
           <CardTitle>Model assignment</CardTitle>
           <CardDescription>
-            Pick the provider and model for each job. The model list is
-            fetched live from that provider&apos;s own catalogue.
+            Pick the provider and model for each job. The model list is fetched
+            live from that provider&apos;s own catalogue.
           </CardDescription>
         </CardHeader>
         <CardContent className="divide-y divide-border">
@@ -119,7 +131,11 @@ function ProviderRow({ provider }: { provider: ProviderPublic }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <ProviderDialog provider={provider} triggerLabel="Edit" triggerVariant="ghost" />
+        <ProviderDialog
+          provider={provider}
+          triggerLabel="Edit"
+          triggerVariant="ghost"
+        />
         {confirming ? (
           <>
             <Button
@@ -130,7 +146,11 @@ function ProviderRow({ provider }: { provider: ProviderPublic }) {
             >
               Confirm
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirming(false)}
+            >
               Cancel
             </Button>
           </>
@@ -184,7 +204,9 @@ function ProviderDialog({
       <DialogContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>{isEdit ? "Edit provider" : "Add provider"}</DialogTitle>
+            <DialogTitle>
+              {isEdit ? "Edit provider" : "Add provider"}
+            </DialogTitle>
             <DialogDescription>
               Keys are stored locally and never sent to the browser once saved.
             </DialogDescription>
@@ -229,7 +251,9 @@ function ProviderDialog({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={
-                isEdit ? (provider?.apiKeyMasked ?? "Leave blank to keep unchanged") : "sk-..."
+                isEdit
+                  ? (provider?.apiKeyMasked ?? "Leave blank to keep unchanged")
+                  : "sk-..."
               }
               autoComplete="off"
             />

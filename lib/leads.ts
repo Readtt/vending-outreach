@@ -109,9 +109,7 @@ export interface LeadDeps {
   resolveMx?: (
     hostname: string
   ) => Promise<{ exchange: string; priority: number }[]>
-  lookup?: (
-    hostname: string
-  ) => Promise<{ address: string; family: number }[]>
+  lookup?: (hostname: string) => Promise<{ address: string; family: number }[]>
   now?: () => number
   /** Injected so tests don't call a real model. */
   extractFact?: (
@@ -360,7 +358,10 @@ async function assertSafeUrlWith(
     return url
   }
 
-  if (host.toLowerCase() === "localhost" || host.toLowerCase().endsWith(".localhost")) {
+  if (
+    host.toLowerCase() === "localhost" ||
+    host.toLowerCase().endsWith(".localhost")
+  ) {
     throw new UnsafeUrlError(rawUrl, "localhost is a blocked host")
   }
 
@@ -375,7 +376,10 @@ async function assertSafeUrlWith(
         `DNS lookup of ${host} failed with ${code} — this machine's resolver is unavailable`
       )
     }
-    throw new UnsafeUrlError(rawUrl, `DNS lookup failed (${code ?? String(err)})`)
+    throw new UnsafeUrlError(
+      rawUrl,
+      `DNS lookup failed (${code ?? String(err)})`
+    )
   }
 
   if (addresses.length === 0) {
@@ -432,7 +436,8 @@ function perOrigin<T>(origin: string, job: () => Promise<T>): Promise<T> {
 // Fetching a page
 // ---------------------------------------------------------------------------
 
-const HTML_CONTENT_TYPE = /^(?:text\/html|application\/xhtml\+xml|text\/plain)\b/i
+const HTML_CONTENT_TYPE =
+  /^(?:text\/html|application\/xhtml\+xml|text\/plain)\b/i
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 
 export interface PageRecord {
@@ -450,7 +455,10 @@ export interface FetchedPage {
   record: PageRecord
 }
 
-async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+async function readCapped(
+  res: Response,
+  maxBytes: number
+): Promise<Uint8Array> {
   const declared = Number(res.headers.get("content-length"))
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new ScrapeError(
@@ -690,7 +698,10 @@ export function parseRobots(text: string, agent = ROBOTS_AGENT): RobotsRules {
       const seconds = Number(value)
       if (Number.isFinite(seconds) && seconds >= 0) {
         for (const name of currentAgents) {
-          crawlDelays.set(name, Math.max(crawlDelays.get(name) ?? 0, seconds * 1000))
+          crawlDelays.set(
+            name,
+            Math.max(crawlDelays.get(name) ?? 0, seconds * 1000)
+          )
         }
       }
       continue
@@ -1047,7 +1058,9 @@ function extractTextEmails(text: string, foundOn: string): EmailCandidate[] {
   return out
 }
 
-function localAndDomain(email: string): { local: string; domain: string } | undefined {
+function localAndDomain(
+  email: string
+): { local: string; domain: string } | undefined {
   const at = email.lastIndexOf("@")
   if (at <= 0 || at === email.length - 1) return undefined
   return { local: email.slice(0, at), domain: email.slice(at + 1) }
@@ -1155,8 +1168,12 @@ const PERSON_NAME = `${NAME_WORD}(?:\\s+${NAME_WORD}\\.?){1,2}`
 const TITLE =
   "(?:Owner|Co-?Owner|Founder|Co-?Founder|President|Proprietor|General Manager|Managing Partner|Manager|Director)"
 
-const NAME_THEN_TITLE = new RegExp(`(${PERSON_NAME})\\s*[,\u2013-]\\s*${TITLE}\\b`)
-const TITLE_THEN_NAME = new RegExp(`${TITLE}\\s*[:,\u2013-]?\\s+(${PERSON_NAME})`)
+const NAME_THEN_TITLE = new RegExp(
+  `(${PERSON_NAME})\\s*[,\u2013-]\\s*${TITLE}\\b`
+)
+const TITLE_THEN_NAME = new RegExp(
+  `${TITLE}\\s*[:,\u2013-]?\\s+(${PERSON_NAME})`
+)
 
 /**
  * A contact name, only when one is confidently readable from a byline.
@@ -1166,7 +1183,10 @@ const TITLE_THEN_NAME = new RegExp(`${TITLE}\\s*[:,\u2013-]?\\s+(${PERSON_NAME})
  * greeting at all, and there is no way to check the guess. Two anchored
  * patterns, both requiring an explicit title next to the name.
  */
-export function extractContactName(text: string, businessName: string): string | null {
+export function extractContactName(
+  text: string,
+  businessName: string
+): string | null {
   for (const pattern of [NAME_THEN_TITLE, TITLE_THEN_NAME]) {
     const match = pattern.exec(text)
     if (!match) continue
@@ -1174,7 +1194,10 @@ export function extractContactName(text: string, businessName: string): string |
     if (name.length < 3) continue
     if (containsUrlOrEmail(name)) continue
     // "Smith Auto Repair, Owner" is the business, not a person.
-    const businessWords = businessName.toLowerCase().split(/\s+/).filter(Boolean)
+    const businessWords = businessName
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
     const nameWords = name.toLowerCase().split(/\s+/)
     if (nameWords.some((word) => businessWords.includes(word))) continue
     return name
@@ -1263,7 +1286,9 @@ export function hasExtendedHours(openingHours: string | null): boolean {
   if (!openingHours) return false
   const value = openingHours.toLowerCase()
   if (value.includes("24/7") || value.includes("00:00-24:00")) return true
-  for (const match of value.matchAll(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g)) {
+  for (const match of value.matchAll(
+    /(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g
+  )) {
     const start = Number(match[1]) * 60 + Number(match[2])
     let end = Number(match[3]) * 60 + Number(match[4])
     if (end <= start) end += 24 * 60 // a range crossing midnight
@@ -1377,7 +1402,9 @@ function existingOsmIds(osmIds: readonly string[]): Set<string> {
 }
 
 /** A node and a way for the same business are two OSM objects and one lead. */
-function dedupeWithinBatch(candidates: readonly OsmCandidate[]): OsmCandidate[] {
+function dedupeWithinBatch(
+  candidates: readonly OsmCandidate[]
+): OsmCandidate[] {
   const byOsmId = new Set<string>()
   const byIdentity = new Set<string>()
   const out: OsmCandidate[] = []
@@ -1427,7 +1454,9 @@ export async function findLocations(
     )
   }
   if (params.types.length === 0) {
-    throw new Error("findLocations: `types` is empty, so there is nothing to search for")
+    throw new Error(
+      "findLocations: `types` is empty, so there is nothing to search for"
+    )
   }
 
   let lat: number
@@ -1620,22 +1649,30 @@ interface ResearchRecord {
   osm?: OsmResearch
   enrichedAt: number
   website: string | null
-  robots: { url: string; source: string; disallowsAll: boolean; crawlDelayMs: number } | null
+  robots: {
+    url: string
+    source: string
+    disallowsAll: boolean
+    crawlDelayMs: number
+  } | null
   pages: PageRecord[]
-  emails: Array<{ email: string; origin: EmailOrigin; foundOn: string; verdict: string }>
+  emails: Array<{
+    email: string
+    origin: EmailOrigin
+    foundOn: string
+    verdict: string
+  }>
   chosenEmail: string | null
   mx: { host: string; exchanges: string[] } | null
   contactName: string | null
-  fact:
-    | {
-        fact: string
-        category: string
-        evidenceSpan: string
-        sourceUrl: string
-        accepted: boolean
-        rejectedBecause?: string
-      }
-    | null
+  fact: {
+    fact: string
+    category: string
+    evidenceSpan: string
+    sourceUrl: string
+    accepted: boolean
+    rejectedBecause?: string
+  } | null
   score: (ScoreBreakdown & { threshold: number }) | null
   pageTextTruncated?: boolean
   outcome: string
@@ -1660,11 +1697,13 @@ function readOsmResearch(lead: LeadRow): OsmResearch | undefined {
  * them (spec §4's depth 2-3). Guessing paths is extra load on a stranger's
  * server for a URL they never published. */
 function linkedContactPages(html: string, base: URL): string[] {
-  const wanted = /^\/?(?:contact|contact-us|contactus|about|about-us|aboutus)\/?$/i
+  const wanted =
+    /^\/?(?:contact|contact-us|contactus|about|about-us|aboutus)\/?$/i
   const out: string[] = []
   for (const match of html.matchAll(HREF_ATTRIBUTE)) {
     const href = (match[1] ?? match[2] ?? match[3] ?? "").trim()
-    if (href.length === 0 || /^(?:mailto|tel|javascript|data):/i.test(href)) continue
+    if (href.length === 0 || /^(?:mailto|tel|javascript|data):/i.test(href))
+      continue
     let resolved: URL
     try {
       resolved = new URL(href, base)
@@ -1788,10 +1827,7 @@ export async function enrichLead(
     outcome: "pending",
   }
 
-  const finish = (
-    reason: UnqualifiedReason,
-    detail: string
-  ): EnrichOutcome => {
+  const finish = (reason: UnqualifiedReason, detail: string): EnrichOutcome => {
     research.outcome = `unqualified:${reason}`
     research.reason = detail
     updateLead(leadId, {
@@ -1923,7 +1959,11 @@ export async function enrichLead(
       candidates.push(...extractTextEmails(htmlToText(page.html), page.url))
     }
     if (osm?.email) {
-      candidates.push({ email: normalizeEmail(osm.email), origin: "osm_tag", foundOn: "osm" })
+      candidates.push({
+        email: normalizeEmail(osm.email),
+        origin: "osm_tag",
+        foundOn: "osm",
+      })
     }
 
     const seenAddresses = new Set<string>()
@@ -1945,7 +1985,10 @@ export async function enrichLead(
     }
 
     if (candidates.length === 0) {
-      return finish("no_email", "no email address appeared on the site or in OSM")
+      return finish(
+        "no_email",
+        "no email address appeared on the site or in OSM"
+      )
     }
     if (accepted.length === 0) {
       return finish(
@@ -1963,7 +2006,8 @@ export async function enrichLead(
     // --- 6. Verify: syntax already checked, now MX ------------------------
     // No SMTP handshake (spec §4): it is unreliable and gets the sending IP
     // greylisted, which costs more than the information is worth.
-    const emailDomain = (localAndDomain(chosen.email) as { domain: string }).domain
+    const emailDomain = (localAndDomain(chosen.email) as { domain: string })
+      .domain
     try {
       const exchanges = await resolved.resolveMx(emailDomain)
       research.mx = {
@@ -2018,7 +2062,11 @@ export async function enrichLead(
       return finish("no_fact", "the research model produced no fact")
     }
 
-    const validation = validateFact(extracted.fact, pageText, extracted.category)
+    const validation = validateFact(
+      extracted.fact,
+      pageText,
+      extracted.category
+    )
     const grounded = verifyEvidenceSpan(extracted.evidenceSpan, pageText)
     research.fact = {
       fact: extracted.fact,
@@ -2029,7 +2077,10 @@ export async function enrichLead(
       ...(validation.ok
         ? grounded
           ? {}
-          : { rejectedBecause: "evidence_span does not appear verbatim in the source" }
+          : {
+              rejectedBecause:
+                "evidence_span does not appear verbatim in the source",
+            }
         : { rejectedBecause: validation.reason ?? "validateFact rejected it" }),
     }
 

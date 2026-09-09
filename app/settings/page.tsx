@@ -1,5 +1,10 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AI_ROLES, getRoleModel, type AiRole, type RoleModelSetting } from "@/lib/ai"
+import {
+  AI_ROLES,
+  getRoleModel,
+  type AiRole,
+  type RoleModelSetting,
+} from "@/lib/ai"
 import { AboutSection } from "./about-section"
 import {
   getAboutSettings,

@@ -21,7 +21,10 @@ interface SendToggleProps {
   initialDryRunCount: number
 }
 
-export function SendToggle({ initialEnabled, initialDryRunCount }: SendToggleProps) {
+export function SendToggle({
+  initialEnabled,
+  initialDryRunCount,
+}: SendToggleProps) {
   const [enabled, setEnabled] = useState(initialEnabled)
   const [dryRunCount, setDryRunCount] = useState(initialDryRunCount)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -38,10 +41,14 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
       setSendEnabledAction(false)
         .then(() => {
           setEnabled(false)
-          toast.success("Sending turned off. Drafts go to outbox-dryrun/ from now on.")
+          toast.success(
+            "Sending turned off. Drafts go to outbox-dryrun/ from now on."
+          )
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to turn sending off.")
+          toast.error(
+            err instanceof Error ? err.message : "Failed to turn sending off."
+          )
         )
     })
   }
@@ -55,7 +62,9 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
           toast.success("Sending is live.")
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to turn sending on.")
+          toast.error(
+            err instanceof Error ? err.message : "Failed to turn sending on."
+          )
         )
     })
   }
@@ -72,7 +81,11 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
           )
         })
         .catch((err: unknown) =>
-          toast.error(err instanceof Error ? err.message : "Failed to clear rehearsal drafts.")
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : "Failed to clear rehearsal drafts."
+          )
         )
     })
   }
@@ -99,9 +112,11 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
       {!enabled && (
         <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           Nothing is being sent. Drafts are written to{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">outbox-dryrun/</code> as{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">.eml</code> files you can open
-          in any mail client.
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            outbox-dryrun/
+          </code>{" "}
+          as <code className="rounded bg-muted px-1 py-0.5 text-xs">.eml</code>{" "}
+          files you can open in any mail client.
         </div>
       )}
 
@@ -110,7 +125,8 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
           <DialogHeader>
             <DialogTitle>Turn on live sending?</DialogTitle>
             <DialogDescription>
-              Real email will go out through your configured mailboxes from now on.
+              Real email will go out through your configured mailboxes from now
+              on.
             </DialogDescription>
           </DialogHeader>
 
@@ -120,7 +136,8 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
                 <>
                   There {dryRunCount === 1 ? "is" : "are"}{" "}
                   <strong>
-                    {dryRunCount} rehearsal message{dryRunCount === 1 ? "" : "s"}
+                    {dryRunCount} rehearsal message
+                    {dryRunCount === 1 ? "" : "s"}
                   </strong>{" "}
                   sitting in <code className="text-xs">outbox-dryrun/</code>.
                 </>
@@ -129,9 +146,9 @@ export function SendToggle({ initialEnabled, initialDryRunCount }: SendTogglePro
               )}
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Rehearsal and real sends use separate uniqueness keys, so leftover rehearsal
-              drafts will not block a real send — clearing them is just tidying up, not
-              required.
+              Rehearsal and real sends use separate uniqueness keys, so leftover
+              rehearsal drafts will not block a real send — clearing them is
+              just tidying up, not required.
             </p>
             {dryRunCount > 0 && (
               <Button

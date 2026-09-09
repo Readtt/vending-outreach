@@ -104,7 +104,9 @@ function parseDetail(detailJson: string | null): Record<string, unknown> {
 }
 
 function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined
 }
 
 const REASON_TYPES = new Set([
@@ -116,7 +118,10 @@ const REASON_TYPES = new Set([
 ])
 
 /** Humanizes one event row's `type` + `detail_json` into display text. */
-export function humanizeEvent(type: string, detailJson: string | null): HumanizedEvent {
+export function humanizeEvent(
+  type: string,
+  detailJson: string | null
+): HumanizedEvent {
   const detail = parseDetail(detailJson)
   const label = EVENT_LABELS[type] ?? titleCaseFallback(type)
 
@@ -129,7 +134,10 @@ export function humanizeEvent(type: string, detailJson: string | null): Humanize
     }
   }
   if (type === "send.enabled_changed") {
-    return { text: detail.enabled === true ? "Turned sending on" : "Turned sending off" }
+    return {
+      text:
+        detail.enabled === true ? "Turned sending on" : "Turned sending off",
+    }
   }
   if (REASON_TYPES.has(type)) {
     return { text: label, extra: asString(detail.reason) }

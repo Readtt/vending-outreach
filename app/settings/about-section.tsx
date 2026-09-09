@@ -18,8 +18,8 @@ export function AboutSection({ settings }: { settings: AboutSettings }) {
       <CardHeader>
         <CardTitle>About you</CardTitle>
         <CardDescription>
-          Goes on every email this app sends. The physical address is
-          required by CAN-SPAM on every commercial email, not just the first.
+          Goes on every email this app sends. The physical address is required
+          by CAN-SPAM on every commercial email, not just the first.
         </CardDescription>
       </CardHeader>
       <CardContent>

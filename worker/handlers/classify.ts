@@ -188,18 +188,30 @@ export function deferPendingCompose(leadId: string, runAfter: number): number {
 // ---------------------------------------------------------------------------
 
 const MONTHS: Readonly<Record<string, number>> = {
-  jan: 1, january: 1,
-  feb: 2, february: 2,
-  mar: 3, march: 3,
-  apr: 4, april: 4,
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
   may: 5,
-  jun: 6, june: 6,
-  jul: 7, july: 7,
-  aug: 8, august: 8,
-  sep: 9, sept: 9, september: 9,
-  oct: 10, october: 10,
-  nov: 11, november: 11,
-  dec: 12, december: 12,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
 }
 
 const MONTH_NAMES = Object.keys(MONTHS).join("|")
@@ -208,9 +220,15 @@ const DATE_PATTERNS: readonly RegExp[] = [
   // 2026-09-15
   /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/,
   // September 15 / Sept 15, 2026
-  new RegExp(String.raw`\b(${MONTH_NAMES})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b`, "i"),
+  new RegExp(
+    String.raw`\b(${MONTH_NAMES})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?\b`,
+    "i"
+  ),
   // 15 September 2026
-  new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(${MONTH_NAMES})\.?(?:,?\s*(\d{4}))?\b`, "i"),
+  new RegExp(
+    String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(${MONTH_NAMES})\.?(?:,?\s*(\d{4}))?\b`,
+    "i"
+  ),
   // 9/15 or 9/15/2026 or 9/15/26 (US order — the corpus is US-only by §0.5)
   /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/,
 ]
@@ -402,9 +420,12 @@ export async function handleClassify(
     // part of a reply from the classifier is exactly how an opt-out buried
     // under 4KB of history gets missed.
     stamp(messageRowId, "classified:truncated")
-    return escalate("reply was truncated, so the classifier saw less than arrived", {
-      messageRowId,
-    })
+    return escalate(
+      "reply was truncated, so the classifier saw less than arrived",
+      {
+        messageRowId,
+      }
+    )
   }
 
   // --- 2. Classify --------------------------------------------------------
@@ -577,8 +598,9 @@ export async function handleClassify(
         })
       }
 
-      const senderResult = (deps.loadSenderInfo ??
-        (() => loadSenderInfoDefault()))()
+      const senderResult = (
+        deps.loadSenderInfo ?? (() => loadSenderInfoDefault())
+      )()
       if (!senderResult.sender) {
         return escalate(
           `cannot send the fixed reply without sender details (Settings -> ${senderResult.missing.join(

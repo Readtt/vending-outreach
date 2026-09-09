@@ -19,7 +19,9 @@ import type { CallOutcome } from "./types"
  * `research_json` rather than overwriting it, since enrichment and the OSM
  * import already store their own keys there.
  */
-export async function generateCallScriptAction(leadId: string): Promise<string> {
+export async function generateCallScriptAction(
+  leadId: string
+): Promise<string> {
   const lead = getLeadById(leadId)
   if (!lead) {
     throw new Error("This lead no longer exists.")
@@ -55,7 +57,12 @@ export async function generateCallScriptAction(leadId: string): Promise<string> 
     (lead.type ? `\nBusiness type: ${lead.type}` : "") +
     `\n\nWrite the call script now.`
 
-  const result = await generateGuarded({ role: "writer", prompt, system, leadId })
+  const result = await generateGuarded({
+    role: "writer",
+    prompt,
+    system,
+    leadId,
+  })
   const script = result.text.trim()
 
   updateLead(leadId, {
@@ -80,7 +87,10 @@ const OUTCOME_STATUS: Record<CallOutcome, LeadStatus> = {
   interested: "hot",
 }
 
-export async function setCallOutcomeAction(leadId: string, outcome: CallOutcome): Promise<void> {
+export async function setCallOutcomeAction(
+  leadId: string,
+  outcome: CallOutcome
+): Promise<void> {
   updateLead(leadId, { status: OUTCOME_STATUS[outcome] })
   revalidatePath("/calls")
   revalidatePath("/")

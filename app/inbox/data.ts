@@ -6,17 +6,28 @@
  * selection state instead of a second round trip per click.
  */
 
-import { listInboxThreads, listMessagesForLead, listRecentEvents } from "@/lib/db"
+import {
+  listInboxThreads,
+  listMessagesForLead,
+  listRecentEvents,
+} from "@/lib/db"
 import { humanizeEvent } from "../humanize-event"
 import { snippet, type ThreadDetail } from "./types"
 
 // Only these types ever move a lead to `hot` (worker/handlers/classify.ts,
 // worker/handlers/compose.ts) — whichever fired most recently for a given
 // lead is "what escalated it."
-const ESCALATION_EVENT_TYPES = ["classify.escalated", "compose.escalated", "inbound.escalate"]
+const ESCALATION_EVENT_TYPES = [
+  "classify.escalated",
+  "compose.escalated",
+  "inbound.escalate",
+]
 
 function escalationReasonFor(leadId: string): string | null {
-  const [latest] = listRecentEvents(1, { leadId, types: ESCALATION_EVENT_TYPES })
+  const [latest] = listRecentEvents(1, {
+    leadId,
+    types: ESCALATION_EVENT_TYPES,
+  })
   if (!latest) return null
   const humanized = humanizeEvent(latest.type, latest.detail_json)
   return humanized.extra ?? humanized.text

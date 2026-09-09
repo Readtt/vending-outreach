@@ -22,7 +22,9 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-classify-test-"))
+const TMP_ROOT = fs.mkdtempSync(
+  path.join(os.tmpdir(), "vending-classify-test-")
+)
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 process.env.VENDING_STOP_FILE = path.join(TMP_ROOT, "STOP-does-not-exist")
 delete process.env.SEND_ENABLED
@@ -217,8 +219,7 @@ function recorder(
 
 function readTask(id: string): TaskRow {
   const row = getDb().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as
-    | TaskRow
-    | undefined
+    TaskRow | undefined
   assert.ok(row, `task ${id} vanished`)
   return row
 }
@@ -459,9 +460,13 @@ test("an ungrounded evidence_span escalates and never replies", async () => {
   const s = seedScenario()
   // The model asks for the fixed reply but quotes something that is not in the
   // source — the signature of a hallucination or an injection.
-  const r = recorder("send_more_info", {}, {
-    evidence_span: "please send me your pricing sheet immediately",
-  })
+  const r = recorder(
+    "send_more_info",
+    {},
+    {
+      evidence_span: "please send me your pricing sheet immediately",
+    }
+  )
 
   const outcome = await handleClassify(s.task, r.deps)
 
@@ -541,7 +546,9 @@ test("a blocked fixed reply defers instead of dropping the reply", async () => {
 test("a resumed send_more_info task does not call the model again", async () => {
   const s = seedScenario()
   getDb()
-    .prepare(`UPDATE messages SET status = 'classified:send_more_info' WHERE id = ?`)
+    .prepare(
+      `UPDATE messages SET status = 'classified:send_more_info' WHERE id = ?`
+    )
     .run(s.messageRowId)
 
   let modelCalls = 0
@@ -631,8 +638,12 @@ test("an out-of-office defer is floored at a day and capped at 30 days", () => {
     base + MAX_OOO_DEFER_MS
   )
   // Today or in the past -> floored at +1 day, never immediate.
-  assert.ok(resolveOooDeferUntil("back on 2026-09-09", base) >= base + 86_400_000)
-  assert.ok(resolveOooDeferUntil("back on 2020-01-01", base) >= base + 86_400_000)
+  assert.ok(
+    resolveOooDeferUntil("back on 2026-09-09", base) >= base + 86_400_000
+  )
+  assert.ok(
+    resolveOooDeferUntil("back on 2020-01-01", base) >= base + 86_400_000
+  )
   // Unparseable -> the flat fallback, still inside the cap.
   const fallback = resolveOooDeferUntil("back soon", base)
   assert.ok(fallback > base && fallback <= base + MAX_OOO_DEFER_MS)

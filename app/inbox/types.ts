@@ -46,5 +46,7 @@ export function formatDateTime(epochMs: number | null): string {
 export function snippet(text: string | null, maxLen = 140): string {
   if (!text) return ""
   const collapsed = text.replace(/\s+/g, " ").trim()
-  return collapsed.length > maxLen ? `${collapsed.slice(0, maxLen)}…` : collapsed
+  return collapsed.length > maxLen
+    ? `${collapsed.slice(0, maxLen)}…`
+    : collapsed
 }

@@ -12,7 +12,11 @@ import { saveTargetingSettingsAction } from "./actions"
 import { LabeledRangeSlider } from "./labeled-range-slider"
 import { BUSINESS_TYPES, type TargetingSettings } from "./data"
 
-export function TargetingSection({ settings }: { settings: TargetingSettings }) {
+export function TargetingSection({
+  settings,
+}: {
+  settings: TargetingSettings
+}) {
   return (
     <Card>
       <CardHeader>
@@ -24,7 +28,10 @@ export function TargetingSection({ settings }: { settings: TargetingSettings }) 
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={saveTargetingSettingsAction} className="flex flex-col gap-6">
+        <form
+          action={saveTargetingSettingsAction}
+          className="flex flex-col gap-6"
+        >
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="location">City or ZIP</Label>
             <Input
@@ -48,7 +55,10 @@ export function TargetingSection({ settings }: { settings: TargetingSettings }) 
             <Label>Business types</Label>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
               {BUSINESS_TYPES.map((type) => (
-                <label key={type.id} className="flex items-center gap-2 text-sm">
+                <label
+                  key={type.id}
+                  className="flex items-center gap-2 text-sm"
+                >
                   <input
                     type="checkbox"
                     name="businessTypes"

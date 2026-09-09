@@ -6,9 +6,18 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { generateCallScriptAction, setCallOutcomeAction } from "./actions"
-import { CALL_OUTCOME_LABELS, type CallListItem, type CallOutcome } from "./types"
+import {
+  CALL_OUTCOME_LABELS,
+  type CallListItem,
+  type CallOutcome,
+} from "./types"
 
-const OUTCOME_ORDER: CallOutcome[] = ["reached", "left_voicemail", "interested", "not_interested"]
+const OUTCOME_ORDER: CallOutcome[] = [
+  "reached",
+  "left_voicemail",
+  "interested",
+  "not_interested",
+]
 
 export function CallCard({ item }: { item: CallListItem }) {
   const router = useRouter()
@@ -22,7 +31,9 @@ export function CallCard({ item }: { item: CallListItem }) {
     generateCallScriptAction(item.id)
       .then((text) => setScript(text))
       .catch((err: unknown) =>
-        toast.error(err instanceof Error ? err.message : "Failed to generate a script.")
+        toast.error(
+          err instanceof Error ? err.message : "Failed to generate a script."
+        )
       )
       .finally(() => setGenerating(false))
   }
@@ -45,7 +56,9 @@ export function CallCard({ item }: { item: CallListItem }) {
     <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">{item.name ?? "Unnamed business"}</h2>
+          <h2 className="text-sm font-medium">
+            {item.name ?? "Unnamed business"}
+          </h2>
           <p className="text-xs text-muted-foreground">
             {item.type ? `${item.type} · ` : ""}
             {item.hoursSinceContact}h since first contact
@@ -70,7 +83,9 @@ export function CallCard({ item }: { item: CallListItem }) {
           <summary className="cursor-pointer text-xs text-muted-foreground">
             Email sent — {item.lastEmailSubject ?? "no subject"}
           </summary>
-          <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.lastEmailBody}</p>
+          <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+            {item.lastEmailBody}
+          </p>
         </details>
       )}
 

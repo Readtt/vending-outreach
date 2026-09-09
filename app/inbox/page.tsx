@@ -11,8 +11,8 @@ export default function InboxPage() {
     <div className="mx-auto max-w-5xl px-6 py-10">
       <h1 className="text-lg font-medium">Inbox</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Only people who need a human. Everything the bot could dispose of on its own never shows
-        up here.
+        Only people who need a human. Everything the bot could dispose of on its
+        own never shows up here.
       </p>
       <div className="mt-6">
         <InboxView threads={threads} />

@@ -112,7 +112,9 @@ export const BUSINESS_TYPES = [
 
 export type BusinessTypeId = (typeof BUSINESS_TYPES)[number]["id"]
 
-export const BUSINESS_TYPE_IDS = BUSINESS_TYPES.map((t) => t.id) as BusinessTypeId[]
+export const BUSINESS_TYPE_IDS = BUSINESS_TYPES.map(
+  (t) => t.id
+) as BusinessTypeId[]
 
 function isBusinessTypeId(value: string): value is BusinessTypeId {
   return (BUSINESS_TYPE_IDS as string[]).includes(value)

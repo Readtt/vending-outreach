@@ -51,7 +51,11 @@ type FetchedModels =
 // nothing loaded yet.
 const EMPTY_MODELS: readonly ModelSummary[] = []
 
-export function RoleModelPicker({ role, providers, initial }: RoleModelPickerProps) {
+export function RoleModelPicker({
+  role,
+  providers,
+  initial,
+}: RoleModelPickerProps) {
   const [providerId, setProviderId] = useState<string | undefined>(
     initial?.providerId ?? providers[0]?.id
   )
@@ -60,7 +64,8 @@ export function RoleModelPicker({ role, providers, initial }: RoleModelPickerPro
   const [, startTransition] = useTransition()
 
   const selectedProvider = providers.find((p) => p.id === providerId)
-  const current = fetched && fetched.providerId === providerId ? fetched : undefined
+  const current =
+    fetched && fetched.providerId === providerId ? fetched : undefined
   const loading = providerId !== undefined && current === undefined
   const models = current?.status === "ok" ? current.models : EMPTY_MODELS
   const error = current?.status === "error" ? current.message : null
@@ -70,7 +75,10 @@ export function RoleModelPicker({ role, providers, initial }: RoleModelPickerPro
     let cancelled = false
     fetch(`/api/models?providerId=${encodeURIComponent(providerId)}`)
       .then(async (res) => {
-        const body = (await res.json()) as { models?: ModelSummary[]; error?: string }
+        const body = (await res.json()) as {
+          models?: ModelSummary[]
+          error?: string
+        }
         if (cancelled) return
         if (!res.ok || !body.models) {
           setFetched({
@@ -87,7 +95,8 @@ export function RoleModelPicker({ role, providers, initial }: RoleModelPickerPro
         setFetched({
           providerId,
           status: "error",
-          message: err instanceof Error ? err.message : "Failed to load models.",
+          message:
+            err instanceof Error ? err.message : "Failed to load models.",
         })
       })
     return () => {
@@ -162,7 +171,10 @@ export function RoleModelPicker({ role, providers, initial }: RoleModelPickerPro
             value={modelId}
             onValueChange={handleModelChange}
           >
-            <ModelSelectorTrigger className="w-48" disabled={!providerId || loading}>
+            <ModelSelectorTrigger
+              className="w-48"
+              disabled={!providerId || loading}
+            >
               {loading ? "Loading…" : undefined}
             </ModelSelectorTrigger>
             <ModelSelectorContent searchable />

@@ -24,7 +24,10 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={saveSendingSettingsAction} className="flex flex-col gap-6">
+        <form
+          action={saveSendingSettingsAction}
+          className="flex flex-col gap-6"
+        >
           <LabeledRangeSlider
             name="emailsPerDay"
             label="Emails per day"
@@ -37,7 +40,10 @@ export function SendingSection({ settings }: { settings: SendingSettings }) {
           <LabeledRangeSlider
             name="sendGapMinutes"
             label="Gap between sends"
-            defaultValue={[settings.sendGapMinMinutes, settings.sendGapMaxMinutes]}
+            defaultValue={[
+              settings.sendGapMinMinutes,
+              settings.sendGapMaxMinutes,
+            ]}
             min={1}
             max={60}
             unit="minutes"

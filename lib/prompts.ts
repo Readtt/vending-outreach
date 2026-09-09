@@ -254,7 +254,10 @@ export function fillTemplate(
 }
 
 /** Renders a fixed reply template end-to-end: spintax, then sender fields. */
-export function renderFixedReply(key: FixedReplyKey, sender: SenderInfo): string {
+export function renderFixedReply(
+  key: FixedReplyKey,
+  sender: SenderInfo
+): string {
   return fillTemplate(expandSpintax(FIXED_REPLY_TEMPLATES[key]), {
     senderName: sender.name,
     senderCompany: sender.company,

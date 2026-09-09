@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
     const models = await listModels(providerId)
     return Response.json({ models })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to list models."
+    const message =
+      err instanceof Error ? err.message : "Failed to list models."
     // ModelListError carries the right status for caller-fault cases (an
     // unknown/stale providerId, a provider missing its key or base URL);
     // anything else is treated as an upstream problem (502), not ours (500).

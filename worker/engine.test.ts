@@ -76,8 +76,7 @@ function clearTasks(): void {
 
 function readTask(id: string): TaskRow {
   const row = getDb().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as
-    | TaskRow
-    | undefined
+    TaskRow | undefined
   assert.ok(row, `task ${id} vanished`)
   return row
 }
@@ -92,7 +91,9 @@ function readTask(id: string): TaskRow {
  */
 function makeDue(id: string): void {
   getDb()
-    .prepare(`UPDATE tasks SET run_after = 0 WHERE id = ? AND status = 'pending'`)
+    .prepare(
+      `UPDATE tasks SET run_after = 0 WHERE id = ? AND status = 'pending'`
+    )
     .run(id)
 }
 

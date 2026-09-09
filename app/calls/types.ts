@@ -21,7 +21,8 @@ export interface CallListItem {
 /** The four outcome buttons. A discriminating string, not a raw
  * `LeadStatus`, so the client never needs the full status vocabulary —
  * `actions.ts` owns the mapping. */
-export type CallOutcome = "reached" | "left_voicemail" | "not_interested" | "interested"
+export type CallOutcome =
+  "reached" | "left_voicemail" | "not_interested" | "interested"
 
 export const CALL_OUTCOME_LABELS: Record<CallOutcome, string> = {
   reached: "Reached",

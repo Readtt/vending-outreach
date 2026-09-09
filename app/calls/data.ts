@@ -45,7 +45,8 @@ export function getCallListItems(now: number = Date.now()): CallListItem[] {
       fact: lead.personalization_fact,
       lastEmailSubject: lastOutbound?.subject ?? null,
       lastEmailBody: lastOutbound?.body ?? null,
-      callScript: typeof research.callScript === "string" ? research.callScript : null,
+      callScript:
+        typeof research.callScript === "string" ? research.callScript : null,
     }
   })
 }

@@ -19,7 +19,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { LeadDetailDialog } from "./lead-detail-dialog"
-import { LEAD_STATUS_BADGE_VARIANT, LEAD_STATUS_LABELS, type LeadListItem } from "./types"
+import {
+  LEAD_STATUS_BADGE_VARIANT,
+  LEAD_STATUS_LABELS,
+  type LeadListItem,
+} from "./types"
 
 interface LeadTableProps {
   items: LeadListItem[]
@@ -70,7 +74,9 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
         </Select>
         <span className="text-xs text-muted-foreground">
           {filtered.length} of {items.length} shown
-          {total > cap ? ` · ${total} leads total, showing the ${cap} most recent` : ""}
+          {total > cap
+            ? ` · ${total} leads total, showing the ${cap} most recent`
+            : ""}
         </span>
       </div>
 
@@ -90,7 +96,10 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
           <TableBody>
             {filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground">
+                <TableCell
+                  colSpan={7}
+                  className="text-center text-muted-foreground"
+                >
                   No leads match.
                 </TableCell>
               </TableRow>
@@ -107,15 +116,23 @@ export function LeadTable({ items, total, cap }: LeadTableProps) {
                 >
                   {item.name ?? "Unnamed"}
                 </TableCell>
-                <TableCell className="text-muted-foreground">{item.type ?? "—"}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.type ?? "—"}
+                </TableCell>
                 <TableCell>
                   <Badge variant={LEAD_STATUS_BADGE_VARIANT[item.status]}>
                     {LEAD_STATUS_LABELS[item.status]}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{item.score}</TableCell>
-                <TableCell className="text-muted-foreground">{item.email ?? "—"}</TableCell>
-                <TableCell className="text-muted-foreground">{item.phone ?? "—"}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {item.score}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.email ?? "—"}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {item.phone ?? "—"}
+                </TableCell>
                 <TableCell
                   className="max-w-64 truncate text-muted-foreground"
                   title={item.fact ?? undefined}

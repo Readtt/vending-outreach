@@ -18,7 +18,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { findLocationsAction, importLeadsAction } from "./actions"
-import type { BusinessTypeOption, FindLocationsFormResult, OsmCandidate } from "./types"
+import type {
+  BusinessTypeOption,
+  FindLocationsFormResult,
+  OsmCandidate,
+} from "./types"
 
 type SearchState =
   | { status: "idle" }
@@ -54,12 +58,17 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
   function handleSearch() {
     setState({ status: "searching" })
     startTransition(() => {
-      findLocationsAction({ place, radiusMiles, types: Array.from(selectedTypes) })
+      findLocationsAction({
+        place,
+        radiusMiles,
+        types: Array.from(selectedTypes),
+      })
         .then((result) => setState({ status: "results", result }))
         .catch((err: unknown) =>
           setState({
             status: "error",
-            message: err instanceof Error ? err.message : "Search failed. Try again.",
+            message:
+              err instanceof Error ? err.message : "Search failed. Try again.",
           })
         )
     })
@@ -76,7 +85,9 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
           )
           router.refresh()
         })
-        .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Import failed."))
+        .catch((err: unknown) =>
+          toast.error(err instanceof Error ? err.message : "Import failed.")
+        )
     })
   }
 
@@ -90,13 +101,15 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button size="sm" />}>Find locations</DialogTrigger>
+      <DialogTrigger render={<Button size="sm" />}>
+        Find locations
+      </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Find locations</DialogTitle>
           <DialogDescription>
-            Searches OpenStreetMap for nearby businesses. US only — a search outside the US is
-            refused. This can take 10–30 seconds.
+            Searches OpenStreetMap for nearby businesses. US only — a search
+            outside the US is refused. This can take 10–30 seconds.
           </DialogDescription>
         </DialogHeader>
 
@@ -115,7 +128,9 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
               <Label>Radius</Label>
-              <span className="text-sm text-muted-foreground tabular-nums">{radiusMiles} mi</span>
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {radiusMiles} mi
+              </span>
             </div>
             <Slider
               min={1}
@@ -131,7 +146,10 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
             <Label>Business types</Label>
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
               {typeOptions.map((type) => (
-                <label key={type.id} className="flex items-center gap-2 text-sm">
+                <label
+                  key={type.id}
+                  className="flex items-center gap-2 text-sm"
+                >
                   <input
                     type="checkbox"
                     checked={selectedTypes.has(type.id)}
@@ -144,19 +162,30 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
             </div>
           </div>
 
-          {state.status === "error" && <p className="text-sm text-destructive">{state.message}</p>}
+          {state.status === "error" && (
+            <p className="text-sm text-destructive">{state.message}</p>
+          )}
 
           {state.status === "results" && (
             <div className="rounded-lg border border-border px-3 py-2.5 text-sm">
               <p>
-                Found <strong className="tabular-nums">{state.result.totalFound}</strong>
-                {state.result.resolvedPlace ? ` near ${state.result.resolvedPlace}` : ""} —{" "}
-                <strong className="tabular-nums">{state.result.newCount}</strong> new.
+                Found{" "}
+                <strong className="tabular-nums">
+                  {state.result.totalFound}
+                </strong>
+                {state.result.resolvedPlace
+                  ? ` near ${state.result.resolvedPlace}`
+                  : ""}{" "}
+                —{" "}
+                <strong className="tabular-nums">
+                  {state.result.newCount}
+                </strong>{" "}
+                new.
               </p>
               {state.result.clamped && (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                  The search area was pulled back to US bounds — searches outside the US are
-                  refused by design (CASL/GDPR).
+                  The search area was pulled back to US bounds — searches
+                  outside the US are refused by design (CASL/GDPR).
                 </p>
               )}
               {state.result.newCount === 0 && (
@@ -169,9 +198,11 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
 
           {state.status === "imported" && (
             <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm">
-              Imported {state.inserted} lead{state.inserted === 1 ? "" : "s"} — enrichment
-              queued.
-              {state.skipped > 0 ? ` ${state.skipped} already known, skipped.` : ""}
+              Imported {state.inserted} lead{state.inserted === 1 ? "" : "s"} —
+              enrichment queued.
+              {state.skipped > 0
+                ? ` ${state.skipped} already known, skipped.`
+                : ""}
             </div>
           )}
         </div>
@@ -194,7 +225,10 @@ export function FindLocationsDialog({ typeOptions }: FindLocationsDialogProps) {
             </Button>
           )}
           {state.status === "results" && state.result.newCount > 0 && (
-            <Button onClick={() => handleImport(state.result.candidates)} disabled={isPending}>
+            <Button
+              onClick={() => handleImport(state.result.candidates)}
+              disabled={isPending}
+            >
               {isPending
                 ? "Importing…"
                 : `Import ${state.result.newCount} lead${state.result.newCount === 1 ? "" : "s"}`}

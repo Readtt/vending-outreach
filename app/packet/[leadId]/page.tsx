@@ -16,7 +16,8 @@ export default async function PacketPage({
   if (!packet) notFound()
 
   const { sender } = packet
-  const senderIncomplete = !sender.name.trim() || !sender.company.trim() || !sender.address.trim()
+  const senderIncomplete =
+    !sender.name.trim() || !sender.company.trim() || !sender.address.trim()
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-white text-black print:static print:overflow-visible">
@@ -31,12 +32,13 @@ export default async function PacketPage({
 
         {senderIncomplete && (
           <div className="mb-6 rounded-lg border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-900 print:hidden">
-            Your name, company, and address aren&apos;t fully set. Add them under{" "}
+            Your name, company, and address aren&apos;t fully set. Add them
+            under{" "}
             <Link href="/settings" className="underline underline-offset-2">
               Settings → About you
             </Link>{" "}
-            before handing this out — a physical address is required by CAN-SPAM on anything
-            you leave behind.
+            before handing this out — a physical address is required by CAN-SPAM
+            on anything you leave behind.
           </div>
         )}
 
@@ -46,7 +48,9 @@ export default async function PacketPage({
           </p>
           <h1 className="mt-1 text-2xl font-semibold">{packet.businessName}</h1>
           {packet.businessAddress && (
-            <p className="mt-1 text-sm text-neutral-600">{packet.businessAddress}</p>
+            <p className="mt-1 text-sm text-neutral-600">
+              {packet.businessAddress}
+            </p>
           )}
         </header>
 
@@ -68,13 +72,16 @@ export default async function PacketPage({
             <ol className="mt-1.5 list-decimal pl-5">
               <li>We deliver and install the machine — no cost to you.</li>
               <li>We stock it and keep it running.</li>
-              <li>You get a share of what it sells. Nothing for you to manage.</li>
+              <li>
+                You get a share of what it sells. Nothing for you to manage.
+              </li>
             </ol>
           </div>
 
           <p>
-            Reply to the note left with this packet, or reach out using the details below —
-            we&apos;re happy to answer questions before you decide.
+            Reply to the note left with this packet, or reach out using the
+            details below — we&apos;re happy to answer questions before you
+            decide.
           </p>
         </section>
 
