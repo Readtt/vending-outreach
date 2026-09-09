@@ -130,3 +130,14 @@
     @apply font-sans;
     }
 }
+
+/* The app shell's sidebar is navigation chrome and must never end up on
+   paper — belt-and-suspenders alongside the packet page's own on-screen
+   overlay (app/packet/[leadId]/page.tsx), since `position: fixed` covering
+   it visually on screen is not a guarantee about how a given browser's
+   print engine paints a fixed element. */
+@media print {
+  aside {
+    display: none !important;
+  }
+}
