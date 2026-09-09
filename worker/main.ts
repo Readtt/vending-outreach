@@ -40,6 +40,14 @@ import { formatTickResult, tick, type TickResult } from "./engine.ts"
 /** Spec §8: 60s, not 30s. IMAP is IDLE-driven, so the tick is not a poller. */
 export const TICK_INTERVAL_MS = 60 * 1000
 
+/**
+ * How long to wait before retrying the single-instance lock.
+ *
+ * A stale lock clears after roughly three minutes, so this retries a handful
+ * of times across that window rather than spinning.
+ */
+export const LOCK_RETRY_MS = 15 * 1000
+
 function stamp(): string {
   return new Date().toISOString().slice(11, 19)
 }
@@ -103,6 +111,10 @@ export interface WorkerDeps {
   scheduleTicks?: boolean
   /** False in tests: no IMAP, no reconciliation. */
   startWatcher?: boolean
+  /** Lock retry interval. `0` restores exit-on-contention, for tests. */
+  lockRetryMs?: number
+  /** Injectable so a test does not spend real seconds waiting. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface WorkerHandle {
@@ -112,8 +124,12 @@ export interface WorkerHandle {
 }
 
 /**
- * Boots the engine. Resolves to null when another instance holds the lock, in
- * which case it has already logged why and called `exit(0)`.
+ * Boots the engine, waiting for the single-instance lock if another process
+ * holds it.
+ *
+ * Resolves to null only when `lockRetryMs` is 0 or less and the lock is held —
+ * the one-shot behaviour tests use — in which case it has already logged why
+ * and called `exit(0)`.
  */
 export async function startWorker(
   deps: WorkerDeps = {}
@@ -129,17 +145,41 @@ export async function startWorker(
   // Two terminals running `pnpm dev` must not both drive the engine: they
   // would each claim tasks, each renew leases, and each send.
   const acquire = deps.acquireLock ?? acquireSingletonLock
-  if (!acquire(pid)) {
-    const holder = (deps.readLockHolderPid ?? readLockHolderPid)()
-    log(
-      `another worker already holds the engine lock` +
-        (holder === null ? "" : ` (pid ${holder})`) +
-        `. Exiting — this is normal if you started \`pnpm dev\` twice. ` +
-        `Stop the other process (or wait ~3 minutes if it crashed) and retry.`
-    )
-    exit(0)
-    return null
+  const lockRetryMs = deps.lockRetryMs ?? LOCK_RETRY_MS
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+
+  // Wait for the lock rather than exiting.
+  //
+  // Exiting here is worse than it looks: `pnpm dev` runs this under
+  // `concurrently -k`, so one process quitting kills the dev server too. After
+  // any hard kill the lock stays held until its heartbeat goes stale (~3
+  // minutes), which meant a crashed worker left the user with no engine AND no
+  // UI, and a message telling them to wait. Waiting is something this process
+  // can do by itself.
+  //
+  // `lockRetryMs <= 0` keeps the old exit-immediately behaviour for tests and
+  // one-shot runs.
+  let announced = false
+  while (!acquire(pid)) {
+    if (!announced) {
+      const holder = (deps.readLockHolderPid ?? readLockHolderPid)()
+      log(
+        `another worker holds the engine lock` +
+          (holder === null ? "" : ` (pid ${holder})`) +
+          `. Waiting for it to finish or go stale — the UI keeps working. ` +
+          `This is normal right after a hard kill, or if \`pnpm dev\` is ` +
+          `already running in another terminal.`
+      )
+      announced = true
+    }
+    if (lockRetryMs <= 0) {
+      exit(0)
+      return null
+    }
+    await sleep(lockRetryMs)
   }
+  if (announced) log("engine lock acquired")
   log(`engine started (pid ${pid}), tick every ${intervalMs / 1000}s`)
   emit("engine.started", { detail: { pid, intervalMs } })
 
@@ -156,10 +196,20 @@ export async function startWorker(
     // not await, so a tick that takes longer than the interval overlaps with
     // the next one.
     timer = setTimeout(() => void runTickGuarded(), intervalMs)
-    // Do not hold the event loop open on this timer alone; the IMAP
-    // connections are what keep the process alive, and an unref'd timer means
-    // `stop()` does not have to win a race with it.
-    timer.unref?.()
+    // Deliberately NOT unref'd.
+    //
+    // This timer is what holds the event loop open. An earlier version
+    // unref'd it on the theory that the IMAP connections keep the process
+    // alive — but there are no IMAP connections until a mailbox is
+    // configured, which is exactly the state on first run. The worker
+    // therefore exited straight after its first tick, and because
+    // `concurrently -k` kills siblings, `pnpm dev` appeared to start and
+    // immediately die.
+    //
+    // Even with mailboxes it was wrong: an IMAP drop plus reconnect backoff
+    // leaves a window with no open sockets, and the process would exit
+    // mid-backoff. `stop()` clears this timer, so a prompt shutdown never
+    // depended on unref in the first place.
   }
 
   const runTickGuarded = async (): Promise<void> => {
@@ -175,7 +225,9 @@ export async function startWorker(
       if (!result.lockOk) {
         // Another process took the lock over as stale, which means it is now
         // also claiming tasks. Two engines is worse than none.
-        log("lost the singleton lock — another engine took over. Shutting down.")
+        log(
+          "lost the singleton lock — another engine took over. Shutting down."
+        )
         emit("engine.lock_lost", { detail: { pid } })
         inflight = null
         await stop()
