@@ -16,9 +16,7 @@
 
 import type { LeadStatus } from "@/lib/db"
 import type { Country } from "@/lib/geo"
-import type { LeadType, OsmCandidate } from "@/lib/osm"
-
-export type { OsmCandidate }
+import type { LeadType } from "@/lib/osm"
 
 export interface LeadListItem {
   id: string
@@ -51,7 +49,13 @@ export interface FindLocationsFormResult {
   newCount: number
   clamped: boolean
   resolvedPlace?: string
-  candidates: OsmCandidate[]
+  /**
+   * Where the server parked the candidates, for `importLeadsAction` to read
+   * back. Deliberately not the candidates: they run to megabytes on a wide
+   * search, the dialog renders none of them, and a server action body may
+   * only be 1 MB.
+   */
+  searchId: string
 }
 
 export interface LeadMessageItem {

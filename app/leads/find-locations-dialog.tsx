@@ -22,7 +22,6 @@ import { findLocationsAction, importLeadsAction } from "./actions"
 import type {
   BusinessTypeOption,
   FindLocationsFormResult,
-  OsmCandidate,
   TargetingDefaults,
 } from "./types"
 
@@ -102,9 +101,9 @@ export function FindLocationsDialog({
     })
   }
 
-  function handleImport(candidates: OsmCandidate[]) {
+  function handleImport(searchId: string) {
     startTransition(() => {
-      importLeadsAction(candidates)
+      importLeadsAction(searchId)
         .then(({ inserted, skipped }) => {
           setState({ status: "imported", inserted, skipped })
           toast.success(
@@ -304,7 +303,7 @@ export function FindLocationsDialog({
           )}
           {state.status === "results" && state.result.newCount > 0 && (
             <Button
-              onClick={() => handleImport(state.result.candidates)}
+              onClick={() => handleImport(state.result.searchId)}
               disabled={isPending}
             >
               {isPending

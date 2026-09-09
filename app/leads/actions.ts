@@ -12,9 +12,11 @@ import {
   countLeads,
   enqueue,
   getLeadById,
+  getSearchResult,
   listLeads,
   listMessagesForLead,
   listRecentEvents,
+  saveSearchResult,
   updateLead,
 } from "@/lib/db"
 import { isCountry } from "@/lib/geo"
@@ -62,6 +64,9 @@ export async function findLocationsAction(
     countries,
   })
 
+  // The candidates stay here. Handing the browser a `searchId` instead of the
+  // list itself is what keeps `importLeadsAction` under the 1 MB server action
+  // body limit — see migration 5 in `lib/db.ts`.
   return {
     totalFound: result.totalFound,
     newCount: result.newCount,
@@ -69,7 +74,7 @@ export async function findLocationsAction(
     ...(result.resolvedPlace !== undefined
       ? { resolvedPlace: result.resolvedPlace }
       : {}),
-    candidates: result.candidates,
+    searchId: saveSearchResult(JSON.stringify(result.candidates)),
   }
 }
 
@@ -79,17 +84,35 @@ export interface ImportLeadsResult {
 }
 
 /**
- * Imports candidates and enqueues one `enrich` task per newly-inserted lead.
- * Without the enqueue, an import writes `status='new'` rows that nothing
- * ever picks up — `lib/leads.ts` deliberately enqueues nothing itself (the
- * worker owns the task queue), so the caller that turns candidates into
- * leads is the one place this has to happen. Only the actually-new
- * `leadIds` are enqueued, never a skipped duplicate.
+ * Imports the candidates a search parked under `searchId`, and enqueues one
+ * `enrich` task per newly-inserted lead. Without the enqueue, an import
+ * writes `status='new'` rows that nothing ever picks up — `lib/leads.ts`
+ * deliberately enqueues nothing itself (the worker owns the task queue), so
+ * the caller that turns candidates into leads is the one place this has to
+ * happen. Only the actually-new `leadIds` are enqueued, never a skipped
+ * duplicate.
+ *
+ * Takes an id rather than the candidates themselves because the candidates
+ * are the one thing here that has no size bound: a 20-mile search around
+ * Toronto is 7,435 of them and 1.62 MB, and a server action body may be 1 MB.
+ * Sending the id keeps this request the same handful of bytes at every search
+ * size, and the browser was never shown the list anyway.
  */
 export async function importLeadsAction(
-  candidates: OsmCandidate[]
+  searchId: string
 ): Promise<ImportLeadsResult> {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
+  const stored =
+    typeof searchId === "string" ? getSearchResult(searchId) : undefined
+  if (stored === undefined) {
+    // Only reachable once a few more searches have pushed this one out of the
+    // table, which needs a second tab — but "nothing happened" is not an
+    // acceptable answer to a button press, so it gets a real sentence.
+    throw new Error(
+      "That search is no longer held. Run the search again, then add."
+    )
+  }
+  const candidates = JSON.parse(stored) as OsmCandidate[]
+  if (candidates.length === 0) {
     throw new Error("Nothing to import — run a search first.")
   }
   const result = importCandidates(candidates)

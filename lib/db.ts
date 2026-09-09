@@ -288,6 +288,33 @@ const migrations: Migration[] = [
       if (country) update.run(country, row.id)
     }
   },
+  // Migration 5: park a search's candidates here instead of sending them to
+  // the browser and back.
+  //
+  // The Leads dialog runs in two steps — search, then Add — so the candidate
+  // list has to survive between two requests. It used to survive in React
+  // state, which meant the whole list was serialized down to the browser and
+  // posted back up again on Add. A 20-mile search around Toronto is 7,435
+  // candidates and 1.62 MB, and Next.js caps a server action body at 1 MB, so
+  // Add answered "Body exceeded 1 MB limit" and imported nothing. The browser
+  // never showed a single one of those candidates — it renders two counts —
+  // so the round trip bought nothing at any size.
+  //
+  // Not `http_cache`, despite the near-identical shape: that table caches
+  // *responses from an HTTP API*, keyed by the request that produced them and
+  // read back by whoever repeats that request. These rows are keyed by an
+  // opaque handle that only the browser holds, and are evicted by count
+  // rather than by age, because one row here is bigger than everything in
+  // that table put together.
+  (db) => {
+    db.exec(`
+      CREATE TABLE searches (
+        id           TEXT PRIMARY KEY,
+        result_json  TEXT NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+    `)
+  },
 ]
 
 /**
@@ -878,6 +905,61 @@ export function setCachedFetch(
        response_json = excluded.response_json,
        fetched_at = excluded.fetched_at`
   ).run(cacheKey, kind, responseJson, Date.now())
+}
+
+// ---------------------------------------------------------------------------
+// Search results — the handoff between "Search" and "Add" on the Leads page
+// ---------------------------------------------------------------------------
+
+/**
+ * How many past searches stay readable.
+ *
+ * One wide search is ~1.6 MB, so this is a disk budget, not a history
+ * feature: nothing reads a search except the Add button belonging to it, and
+ * the dialog only ever has one result on screen. A handful of rows is slack
+ * for a second tab, not something anyone navigates back through.
+ */
+export const SEARCH_RESULT_KEEP = 5
+
+/**
+ * Stores one search's candidates and returns the handle the browser holds
+ * onto. The JSON is opaque here — `lib/leads.ts` owns its shape, exactly as
+ * it owns the shape of what `getCachedFetch` hands back.
+ */
+export function saveSearchResult(resultJson: string): string {
+  const db = getDb()
+  const id = randomUUID()
+
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    db.prepare(
+      `INSERT INTO searches (id, result_json, created_at) VALUES (?, ?, ?)`
+    ).run(id, resultJson, Date.now())
+
+    // By rowid, not by created_at: several searches can land inside the same
+    // millisecond, and a tie there could evict the row this call just wrote —
+    // which is the one row that is certain to be read back.
+    db.prepare(
+      `DELETE FROM searches
+        WHERE rowid NOT IN (
+          SELECT rowid FROM searches ORDER BY rowid DESC LIMIT ?
+        )`
+    ).run(SEARCH_RESULT_KEEP)
+    db.exec("COMMIT")
+  } catch (err) {
+    db.exec("ROLLBACK")
+    throw err
+  }
+
+  return id
+}
+
+/** Reads a stored search back, or `undefined` once it has aged out. */
+export function getSearchResult(id: string): string | undefined {
+  const row = getDb()
+    .prepare(`SELECT result_json FROM searches WHERE id = ?`)
+    .get(id) as { result_json: string } | undefined
+  return row?.result_json
 }
 
 // ---------------------------------------------------------------------------

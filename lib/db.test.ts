@@ -34,6 +34,9 @@ import {
   LEAD_STATUSES,
   MIGRATION_COUNT,
   listLeads,
+  saveSearchResult,
+  getSearchResult,
+  SEARCH_RESULT_KEEP,
   updateLead,
   type LeadRow,
 } from "./db.ts"
@@ -141,6 +144,7 @@ test("migration 3 backfills legacy dry-run rows and unblocks their real send", (
     // after this one has to be undone here too, or reopening replays it
     // against a schema that already has it.
     fresh.exec(`
+      DROP TABLE searches;
       ALTER TABLE leads DROP COLUMN country;
       DROP INDEX ux_msg_step;
       DROP INDEX ux_msg_step_dryrun;
@@ -767,4 +771,56 @@ test("cancelPendingTasksForLead joins the caller's transaction", () => {
   db.exec("ROLLBACK")
 
   assert.equal(taskStatus(task), "pending")
+})
+
+// ---------------------------------------------------------------------------
+// Search results
+// ---------------------------------------------------------------------------
+
+test("a saved search result comes back byte-for-byte", () => {
+  const json = JSON.stringify([
+    { osmId: "node/1", name: "Kettle & Co", lat: 43.7, lng: -79.1 },
+  ])
+  const id = saveSearchResult(json)
+
+  assert.equal(getSearchResult(id), json)
+})
+
+test("an unknown search id reads as a miss, not an exception", () => {
+  assert.equal(getSearchResult(randomUUID()), undefined)
+})
+
+test("each save gets its own id", () => {
+  const a = saveSearchResult("[]")
+  const b = saveSearchResult("[]")
+
+  assert.notEqual(a, b)
+})
+
+test(`only the newest ${SEARCH_RESULT_KEEP} searches are kept`, () => {
+  getDb().exec("DELETE FROM searches")
+  // One search over a large radius is ~1.6 MB of candidates, so an unbounded
+  // table would grow the database by that much on every click of Search.
+  const ids = Array.from({ length: SEARCH_RESULT_KEEP + 3 }, (_, i) =>
+    saveSearchResult(JSON.stringify({ n: i }))
+  )
+
+  const dropped = ids.slice(0, 3)
+  const kept = ids.slice(3)
+  for (const id of dropped) {
+    assert.equal(getSearchResult(id), undefined, `${id} should have aged out`)
+  }
+  for (const id of kept) {
+    assert.ok(getSearchResult(id), `${id} should still be readable`)
+  }
+})
+
+test("pruning never evicts the search just saved", () => {
+  getDb().exec("DELETE FROM searches")
+  // The import reads back the id the search handed out. If a prune could
+  // race ahead of it, "Add" would fail on a result the user is looking at.
+  for (let i = 0; i < SEARCH_RESULT_KEEP * 3; i++) {
+    const id = saveSearchResult(JSON.stringify({ n: i }))
+    assert.equal(getSearchResult(id), JSON.stringify({ n: i }))
+  }
 })
