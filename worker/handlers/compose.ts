@@ -61,7 +61,8 @@ import {
 export const STEP_1_SUBJECT_SKELETON =
   "{Quick question about %%business%%|Question about %%business%%|%%business%% - quick question}"
 
-const REPLY_PREFIX_RE = /^\s*(?:(?:re|aw|sv|antw|res|fwd?|fw|tr|vs)\s*(?:\[\d+\])?\s*:\s*)+/i
+const REPLY_PREFIX_RE =
+  /^\s*(?:(?:re|aw|sv|antw|res|fwd?|fw|tr|vs)\s*(?:\[\d+\])?\s*:\s*)+/i
 
 export function buildSubject(
   step: SequenceStep,
@@ -104,7 +105,41 @@ export interface DraftToValidate {
   subject: string
   body: string
   businessName: string
+  /**
+   * The sender's physical postal address, from Settings -> About you.
+   *
+   * Required on every commercial email by CAN-SPAM, which is why
+   * `loadSenderInfo` refuses to build a sender without one. The prompt asks
+   * the model to reproduce it; this is where that is checked.
+   */
+  senderAddress: string
 }
+
+/**
+ * Normalizes for a "does this text contain that text" check.
+ *
+ * The model reproduces the address inside a signature block, so line breaks
+ * and spacing vary run to run. Everything but letters and digits is collapsed
+ * so "1 Main St, Columbus, OH 43215" still matches across a line wrap.
+ */
+function normalizeForContains(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+}
+
+/**
+ * A reply-to-opt-out line, in the shapes the prompts actually produce.
+ *
+ * CAN-SPAM requires a working opt-out mechanism, and spec §2 deliberately uses
+ * reply-based opt-out rather than an unsubscribe link (a link is a spam
+ * signal, and the inbound side already suppresses on opt-out language). So the
+ * line has to genuinely be there, not merely have been requested in a prompt.
+ */
+const OPT_OUT_INVITE_RE = /\b(reply|let me know|say the word|tell me)\b/i
+const OPT_OUT_EFFECT_RE =
+  /(leave you alone|leave you be|stop (emailing|reaching|contacting)|no more emails|won'?t (email|follow|bother)|not a fit|drop it|off (my|the) list)/i
 
 /**
  * The gate between a model and a stranger's inbox.
@@ -159,6 +194,29 @@ export function validateDraft(draft: DraftToValidate): DraftValidation {
     )
   }
 
+  // CAN-SPAM: a physical postal address and a working opt-out on every
+  // commercial message. Both were previously only asked for in the prompt,
+  // which by this file's own doctrine is not a control — a model that drops
+  // the signature block turns every email into a statutory defect, on the
+  // highest-volume message the app sends.
+  const address = draft.senderAddress.trim()
+  if (address.length === 0) {
+    problems.push("no sender postal address was supplied to validate against")
+  } else if (
+    !normalizeForContains(body).includes(normalizeForContains(address))
+  ) {
+    problems.push(
+      "body does not carry the sender's postal address, which CAN-SPAM requires"
+    )
+  }
+
+  if (!OPT_OUT_INVITE_RE.test(body) || !OPT_OUT_EFFECT_RE.test(body)) {
+    problems.push(
+      "body has no reply-to-opt-out line, which is the opt-out mechanism " +
+        "CAN-SPAM requires (there is deliberately no unsubscribe link)"
+    )
+  }
+
   return { ok: problems.length === 0, problems }
 }
 
@@ -206,8 +264,10 @@ export function buildUserPrompt(
       `One verified fact about this business${
         lead.fact_category ? ` (category: ${lead.fact_category})` : ""
       }, extracted verbatim from their own website:`,
-      fenceFn("a fact scraped from the business's website", lead.personalization_fact)
-        .block
+      fenceFn(
+        "a fact scraped from the business's website",
+        lead.personalization_fact
+      ).block
     )
   }
 
@@ -346,7 +406,13 @@ export async function handleCompose(
       leadId,
     })
     body = result.text.trim()
-    validation = validateDraft({ step, subject, body, businessName })
+    validation = validateDraft({
+      step,
+      subject,
+      body,
+      businessName,
+      senderAddress: sender.address,
+    })
     if (validation.ok) break
 
     emit("compose.validation_failed", {

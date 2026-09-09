@@ -13,7 +13,9 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
-const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-handlers-test-"))
+const TMP_ROOT = fs.mkdtempSync(
+  path.join(os.tmpdir(), "vending-handlers-test-")
+)
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 process.env.VENDING_STOP_FILE = path.join(TMP_ROOT, "STOP-does-not-exist")
 delete process.env.SEND_ENABLED
@@ -43,7 +45,12 @@ import {
   validateDraft,
   type ComposeDeps,
 } from "./compose.ts"
-import { HELD_RECHECK_MS, NEXT_STEP, handleSend, type SendHandlerDeps } from "./send.ts"
+import {
+  HELD_RECHECK_MS,
+  NEXT_STEP,
+  handleSend,
+  type SendHandlerDeps,
+} from "./send.ts"
 
 assert.ok(
   process.env.VENDING_DB_PATH?.includes("vending-handlers-test-"),
@@ -58,6 +65,8 @@ const NOW = Date.now()
 const BUSINESS = "Northside Auto Repair"
 
 /** A body that satisfies every rule in `validateDraft` for step 1. */
+const SENDER_ADDRESS = "1 Main St, Columbus, OH 43215"
+
 const GOOD_BODY_STEP_1 =
   `Hi there - I noticed ${BUSINESS} has been open since 1994, which is a long ` +
   "run for a shop on that stretch. I place vending machines in local " +
@@ -89,11 +98,18 @@ interface Seeded {
 }
 
 function seedLead(
-  overrides: { status?: LeadStatus; name?: string | null; email?: string | null } = {}
+  overrides: {
+    status?: LeadStatus
+    name?: string | null
+    email?: string | null
+  } = {}
 ): Seeded {
   counter++
   const leadId = randomUUID()
-  const email = overrides.email === null ? null : (overrides.email ?? `owner@lead${counter}.example`)
+  const email =
+    overrides.email === null
+      ? null
+      : (overrides.email ?? `owner@lead${counter}.example`)
   const mailboxId = randomUUID()
   const db = getDb()
 
@@ -140,8 +156,7 @@ function taskFor(
 
 function readTask(id: string): TaskRow {
   const row = getDb().prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as
-    | TaskRow
-    | undefined
+    TaskRow | undefined
   assert.ok(row, `task ${id} vanished`)
   return row
 }
@@ -184,7 +199,11 @@ function sendDepsFor(
       listMailboxes: () => [seeded.mailbox],
       getMailboxPause: () => null,
       canSendNow: () => OPEN_GATE,
-      checkCircuitBreakers: () => ({ tripped: false, state: null, findings: [] }),
+      checkCircuitBreakers: () => ({
+        tripped: false,
+        state: null,
+        findings: [],
+      }),
       loadSenderInfo: () => SENDER,
       enqueue: rec.fn,
       sendMessage: async (input: SendMessageInput): Promise<SendOutcome> => {
@@ -218,7 +237,8 @@ function composeDepsFor(
       hasWriterModel: () => true,
       enqueue: rec.fn,
       // Deterministic: spintax would otherwise vary the subject per run.
-      expandSpintax: (text: string) => text.replace(/\{([^{}]*)\}/g, (_m, g: string) => g.split("|")[0]),
+      expandSpintax: (text: string) =>
+        text.replace(/\{([^{}]*)\}/g, (_m, g: string) => g.split("|")[0]),
       generateText: async (params) => {
         prompts.push(params.prompt)
         return { text: body }
@@ -334,11 +354,16 @@ test("validateDraft rejects everything the prompt already forbade", () => {
     subject: `Quick question about ${BUSINESS}`,
     body: GOOD_BODY_STEP_1,
     businessName: BUSINESS,
+    senderAddress: SENDER_ADDRESS,
   })
   assert.deepEqual(ok.problems, [])
   assert.equal(ok.ok, true)
 
-  const cases: Array<{ label: string; draft: Parameters<typeof validateDraft>[0]; match: RegExp }> = [
+  const cases: Array<{
+    label: string
+    draft: Parameters<typeof validateDraft>[0]
+    match: RegExp
+  }> = [
     {
       label: "a URL in the body",
       draft: {
@@ -346,6 +371,7 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: `Quick question about ${BUSINESS}`,
         body: `${GOOD_BODY_STEP_1}\nSee vendco.com for details.`,
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /URL or email/,
     },
@@ -356,6 +382,7 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: "Quick question",
         body: GOOD_BODY_STEP_1.replaceAll(BUSINESS, "your business"),
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /never mentions the business name/,
     },
@@ -366,6 +393,7 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: `Quick question about ${BUSINESS}`,
         body: `Hi {{owner_name}}, ${GOOD_BODY_STEP_1}`,
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /unresolved \{\{ \}\}/,
     },
@@ -376,6 +404,7 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: `Re: ${BUSINESS}`,
         body: GOOD_BODY_STEP_1,
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /deceptive subject line/,
     },
@@ -386,6 +415,7 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: `Quick question about ${BUSINESS}`,
         body: `Hi ${BUSINESS}, call me.`,
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /under the 150 minimum/,
     },
@@ -396,10 +426,53 @@ test("validateDraft rejects everything the prompt already forbade", () => {
         subject: `Quick question about ${BUSINESS}`,
         body: `${BUSINESS} ${"padding ".repeat(400)}`,
         businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
       },
       match: /over the 1200 maximum/,
     },
   ]
+
+  cases.push(
+    {
+      label: "the postal address dropped from the signature",
+      draft: {
+        step: 1,
+        subject: `Quick question about ${BUSINESS}`,
+        body: GOOD_BODY_STEP_1.replace(SENDER_ADDRESS, ""),
+        businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
+      },
+      match: /postal address/,
+    },
+    {
+      label: "the opt-out line dropped",
+      draft: {
+        step: 1,
+        subject: `Quick question about ${BUSINESS}`,
+        body: GOOD_BODY_STEP_1.replace(
+          "If it is not a fit, just reply and I will leave you alone.",
+          ""
+        ),
+        businessName: BUSINESS,
+        senderAddress: SENDER_ADDRESS,
+      },
+      match: /opt-out/,
+    }
+  )
+
+  // A line-wrapped address must still count: the model writes it inside a
+  // signature block, so spacing varies run to run.
+  const wrapped = validateDraft({
+    step: 1,
+    subject: `Quick question about ${BUSINESS}`,
+    body: GOOD_BODY_STEP_1.replace(
+      SENDER_ADDRESS,
+      ["1 Main St", "Columbus, OH", "43215"].join("\n")
+    ),
+    businessName: BUSINESS,
+    senderAddress: SENDER_ADDRESS,
+  })
+  assert.deepEqual(wrapped.problems, [], "a wrapped address should still match")
 
   for (const c of cases) {
     const result = validateDraft(c.draft)
@@ -420,7 +493,11 @@ test("the step-1 subject carries the business name and never a Re:", () => {
 })
 
 test("follow-ups inherit the original subject so the thread holds together", () => {
-  const subject = buildSubject(4, BUSINESS, "Quick question about Northside Auto Repair")
+  const subject = buildSubject(
+    4,
+    BUSINESS,
+    "Quick question about Northside Auto Repair"
+  )
   assert.equal(subject, "Quick question about Northside Auto Repair")
 })
 
@@ -439,16 +516,27 @@ test("compose: abandons on a suppressed lead without calling a model", async () 
     },
   })
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "done")
-  assert.match(outcome.status === "done" ? (outcome.reason ?? "") : "", /suppression list/)
+  assert.match(
+    outcome.status === "done" ? (outcome.reason ?? "") : "",
+    /suppression list/
+  )
   assert.equal(modelCalls, 0)
   assert.equal(c.enqueued.length, 0)
 })
 
 test("compose: abandons on a terminal lead status", async () => {
-  for (const status of ["suppressed", "dead", "won", "unqualified"] as LeadStatus[]) {
+  for (const status of [
+    "suppressed",
+    "dead",
+    "won",
+    "unqualified",
+  ] as LeadStatus[]) {
     const s = seedLead({ status })
     const c = composeDepsFor({ isSuppressed: () => false })
     const outcome = await handleCompose(
@@ -493,9 +581,15 @@ test("compose: step 1 is NOT cancelled by the replied check", async () => {
   // A reply cancels the follow-ups. Step 1 has, by definition, not been sent
   // yet, so there is nothing for a reply to have been a reply to.
   const s = seedLead()
-  const c = composeDepsFor({ isSuppressed: () => false, hasEverReplied: () => true })
+  const c = composeDepsFor({
+    isSuppressed: () => false,
+    hasEverReplied: () => true,
+  })
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "done")
   assert.equal(c.enqueued.length, 1)
@@ -507,15 +601,25 @@ test("compose: step 1 is NOT cancelled by the replied check", async () => {
 
 test("compose: a valid draft rides in the send task's payload", async () => {
   const s = seedLead()
-  const c = composeDepsFor({ isSuppressed: () => false, hasEverReplied: () => false })
+  const c = composeDepsFor({
+    isSuppressed: () => false,
+    hasEverReplied: () => false,
+  })
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "done")
   assert.equal(c.enqueued.length, 1)
   const queued = c.enqueued[0]
   assert.equal(queued.kind, "send")
-  assert.equal(queued.options.runAfter, NOW, "step 1 sends as soon as pacing allows")
+  assert.equal(
+    queued.options.runAfter,
+    NOW,
+    "step 1 sends as soon as pacing allows"
+  )
 
   const payload = queued.options.payload as {
     step: number
@@ -543,12 +647,16 @@ test("compose: an invalid draft is regenerated exactly once", async () => {
       c.prompts.push(params.prompt)
       // First attempt smuggles in a URL; second is clean.
       return {
-        text: attempt === 1 ? `${GOOD_BODY_STEP_1}\nvendco.com` : GOOD_BODY_STEP_1,
+        text:
+          attempt === 1 ? `${GOOD_BODY_STEP_1}\nvendco.com` : GOOD_BODY_STEP_1,
       }
     },
   })
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "done")
   assert.equal(attempt, 2, "should have regenerated exactly once")
@@ -574,10 +682,17 @@ test("compose: two failed validations escalate the lead instead of sending", asy
     `${GOOD_BODY_STEP_1}\nvendco.com`
   )
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "done")
-  assert.equal(c.enqueued.length, 0, "nothing unvalidated may be queued to send")
+  assert.equal(
+    c.enqueued.length,
+    0,
+    "nothing unvalidated may be queued to send"
+  )
   assert.deepEqual(patched, [{ id: s.leadId, status: "hot" }])
 })
 
@@ -590,7 +705,10 @@ test("compose: missing sender details dead-letter with the Settings field named"
     }),
   })
 
-  const outcome = await handleCompose(taskFor(s.leadId, "compose", { step: 1 }), c.deps)
+  const outcome = await handleCompose(
+    taskFor(s.leadId, "compose", { step: 1 }),
+    c.deps
+  )
 
   assert.equal(outcome.status, "dead_letter")
   if (outcome.status === "dead_letter") {
@@ -666,8 +784,16 @@ test("send: through the engine, a held lead's task survives as pending with no a
   assert.equal(d.sends.length, 0)
 
   const task = readTask(taskId)
-  assert.equal(task.status, "pending", "the draft the UI reviews must not vanish")
-  assert.equal(task.attempts, 0, "an approval wait must not burn a send attempt")
+  assert.equal(
+    task.status,
+    "pending",
+    "the draft the UI reviews must not vanish"
+  )
+  assert.equal(
+    task.attempts,
+    0,
+    "an approval wait must not burn a send attempt"
+  )
   assert.equal(
     JSON.parse(task.payload_json ?? "{}").body,
     GOOD_BODY_STEP_1,
@@ -684,7 +810,9 @@ test("send: suppression arriving between compose and send cancels the send", asy
   // The realistic sequence: the compose handler queued this send, and then a
   // "not interested" arrived. `suppressAddress` writes the suppression and
   // cancels the lead's pending tasks in ONE transaction (spec §7).
-  suppressAddress(s.email, "reply classified not_interested", { leadId: s.leadId })
+  suppressAddress(s.email, "reply classified not_interested", {
+    leadId: s.leadId,
+  })
 
   const d = sendDepsFor(s)
   const outcome = await handleSend(
@@ -724,12 +852,18 @@ test("send: a suppression-list hit stops the send even while the lead looks cont
 
   assert.equal(d.sends.length, 0)
   assert.equal(outcome.status, "done")
-  assert.match(outcome.status === "done" ? (outcome.reason ?? "") : "", /suppression list/)
+  assert.match(
+    outcome.status === "done" ? (outcome.reason ?? "") : "",
+    /suppression list/
+  )
 })
 
 test("send: a reply arriving before a follow-up cancels it", async () => {
   const s = seedLead({ status: "replied" })
-  const d = sendDepsFor(s, { isSuppressed: () => false, hasEverReplied: () => true })
+  const d = sendDepsFor(s, {
+    isSuppressed: () => false,
+    hasEverReplied: () => true,
+  })
 
   const outcome = await handleSend(
     taskFor(s.leadId, "send", {
@@ -750,7 +884,10 @@ test("send: a reply arriving before a follow-up cancels it", async () => {
 
 test("send: a sent step 1 marks the lead contacted and schedules step 4 at +4 days", async () => {
   const s = seedLead({ status: "ready" })
-  const d = sendDepsFor(s, { isSuppressed: () => false, hasEverReplied: () => false })
+  const d = sendDepsFor(s, {
+    isSuppressed: () => false,
+    hasEverReplied: () => false,
+  })
 
   const outcome = await handleSend(
     taskFor(s.leadId, "send", {
@@ -766,7 +903,11 @@ test("send: a sent step 1 marks the lead contacted and schedules step 4 at +4 da
   assert.equal(d.sends[0].sequenceStep, 1)
   // CAN-SPAM: never a `Re:` on a message they have not answered.
   assert.equal(d.sends[0].recipientReplied, false)
-  assert.equal(d.sends[0].taskRunAfter, NOW, "the send gate needs the task's run_after")
+  assert.equal(
+    d.sends[0].taskRunAfter,
+    NOW,
+    "the send gate needs the task's run_after"
+  )
   assert.equal(getLeadById(s.leadId)?.status, "contacted")
 
   assert.equal(d.enqueued.length, 1)
@@ -778,7 +919,10 @@ test("send: a sent step 1 marks the lead contacted and schedules step 4 at +4 da
 test("send: step 9 ends the sequence", async () => {
   assert.equal(NEXT_STEP[9], null)
   const s = seedLead({ status: "contacted" })
-  const d = sendDepsFor(s, { isSuppressed: () => false, hasEverReplied: () => false })
+  const d = sendDepsFor(s, {
+    isSuppressed: () => false,
+    hasEverReplied: () => false,
+  })
 
   await handleSend(
     taskFor(s.leadId, "send", {
@@ -921,7 +1065,11 @@ test("send: a closed send window defers to the gate's own retryAt", async () => 
   assert.equal(d.sends.length, 0)
   assert.equal(outcome.status, "deferred")
   if (outcome.status === "deferred") {
-    assert.equal(outcome.runAfter, retryAt, "the gate decides when, not the handler")
+    assert.equal(
+      outcome.runAfter,
+      retryAt,
+      "the gate decides when, not the handler"
+    )
   }
 })
 
