@@ -23,6 +23,7 @@ process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 import {
   cancelPendingTasksForLead,
   claimTask,
+  clearAllLeads,
   closeDb,
   completeTask,
   countLeads,
@@ -34,6 +35,7 @@ import {
   LEAD_STATUSES,
   MIGRATION_COUNT,
   listLeads,
+  logEvent,
   saveSearchResult,
   getSearchResult,
   SEARCH_RESULT_KEEP,
@@ -72,6 +74,16 @@ function newLead(overrides: Partial<Parameters<typeof insertLead>[0]> = {}) {
 function clearLeads(): void {
   getDb().exec("DELETE FROM tasks")
   getDb().exec("DELETE FROM leads")
+}
+
+/** Row count for a table, for assertions about what a wipe did and did not touch. */
+function countRows(table: string): number {
+  // The table name is interpolated because SQLite cannot bind an identifier.
+  // Every caller is a literal in this file, never anything from outside it.
+  const row = getDb().prepare(`SELECT count(*) AS n FROM ${table}`).get() as {
+    n: number
+  }
+  return Number(row.n)
 }
 
 // ---------------------------------------------------------------------------
@@ -840,4 +852,126 @@ test("foreign keys are enforced on a connection that has finished migrating", ()
         .run(randomUUID()),
     /FOREIGN KEY/i
   )
+})
+
+// ---------------------------------------------------------------------------
+// clearAllLeads — the "start over" button on the Leads page
+// ---------------------------------------------------------------------------
+
+/** A lead with a message, a task and an event hanging off it. */
+function leadWithEverything(osmId?: string): LeadRow {
+  const lead = newLead(osmId !== undefined ? { osmId } : {})
+  getDb()
+    .prepare(
+      `INSERT INTO messages (id, lead_id, direction, status, created_at)
+       VALUES (?, ?, 'out', 'sent', 1)`
+    )
+    .run(randomUUID(), lead.id)
+  enqueue("enrich", { leadId: lead.id })
+  logEvent("lead.enriched", { leadId: lead.id })
+  return lead
+}
+
+test("clearAllLeads removes every lead and everything hanging off it", () => {
+  clearLeads()
+  getDb().exec("DELETE FROM messages; DELETE FROM events")
+  leadWithEverything()
+  leadWithEverything()
+
+  const removed = clearAllLeads()
+
+  assert.deepEqual(removed, { leads: 2, messages: 2, tasks: 2, events: 2 })
+  assert.equal(countLeads(), 0)
+  assert.equal(countRows("messages"), 0)
+  assert.equal(countRows("tasks"), 0)
+  assert.equal(countRows("events"), 0)
+})
+
+test("clearAllLeads keeps the never-email list, and everything in Settings", () => {
+  clearLeads()
+  getDb().exec("DELETE FROM messages; DELETE FROM events")
+  // The suppression list is the only record that someone asked not to be
+  // contacted. Clearing leads and searching the same town again re-finds
+  // those same businesses, so if this went too, the next run would email
+  // people who have already opted out.
+  getDb()
+    .prepare(
+      `INSERT INTO suppressed (email, reason, created_at) VALUES (?, 'unsubscribe', 1)`
+    )
+    .run("stop@example.com")
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value_json) VALUES ('send.enabled', 'true')`
+    )
+    .run()
+  getDb()
+    .prepare(
+      `INSERT INTO mailboxes (id, email, app_password, created_at) VALUES (?, ?, 'pw', 1)`
+    )
+    .run(randomUUID(), `box-${randomUUID()}@example.com`)
+  leadWithEverything()
+
+  clearAllLeads()
+
+  assert.equal(countRows("suppressed"), 1)
+  assert.equal(countRows("settings"), 1)
+  assert.equal(countRows("mailboxes"), 1)
+})
+
+test("clearAllLeads leaves the engine's own tasks and events alone", () => {
+  clearLeads()
+  getDb().exec("DELETE FROM messages; DELETE FROM events")
+  // A task or an event with no lead_id belongs to the engine, not to any
+  // business — deleting those would cancel work that has nothing to do with
+  // the list being cleared.
+  enqueue("poll")
+  logEvent("engine.started")
+  leadWithEverything()
+
+  const removed = clearAllLeads()
+
+  assert.deepEqual(removed, { leads: 1, messages: 1, tasks: 1, events: 1 })
+  assert.equal(countRows("tasks"), 1)
+  assert.equal(countRows("events"), 1)
+})
+
+test("clearing an empty list is a no-op, not an error", () => {
+  clearLeads()
+  getDb().exec("DELETE FROM messages; DELETE FROM events")
+
+  assert.deepEqual(clearAllLeads(), {
+    leads: 0,
+    messages: 0,
+    tasks: 0,
+    events: 0,
+  })
+})
+
+test("after clearing, the same business imports again as a new lead", () => {
+  clearLeads()
+  getDb().exec("DELETE FROM messages; DELETE FROM events")
+  // The whole point of the button: `osm_id` is UNIQUE, so a re-run of the
+  // same search skips every business already on the list. Once the rows are
+  // gone, that dedupe has nothing to match and the search finds them again.
+  const first = leadWithEverything("node/424242")
+  assert.equal(
+    insertLead({
+      name: "Cafe",
+      type: "cafe",
+      source: "overpass",
+      osmId: "node/424242",
+    }).id,
+    first.id
+  )
+
+  clearAllLeads()
+
+  const second = insertLead({
+    name: "Cafe",
+    type: "cafe",
+    source: "overpass",
+    osmId: "node/424242",
+  })
+  assert.notEqual(second.id, first.id)
+  assert.equal(second.status, "new")
 })

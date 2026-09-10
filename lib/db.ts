@@ -1487,6 +1487,66 @@ export function updateLead(id: string, patch: LeadPatch): LeadRow {
   return row
 }
 
+export interface ClearedCounts {
+  leads: number
+  messages: number
+  tasks: number
+  events: number
+}
+
+/**
+ * Empties the lead list: every business, plus the messages, queued jobs and
+ * events belonging to one.
+ *
+ * This exists so a run can be started over. `osm_id` is UNIQUE, which is what
+ * makes re-running a search idempotent — and also what makes it useless once
+ * the list is populated, because every business it finds is skipped as a
+ * duplicate. Deleting the rows gives that dedupe nothing to match, so the
+ * same search finds the same businesses again, fresh at status 'new'.
+ *
+ * What deliberately survives:
+ *
+ *   - `suppressed`. It is the only record that somebody asked not to be
+ *     contacted, and re-searching the same town re-finds exactly the people
+ *     who opted out. Clearing it would email them again.
+ *   - `settings`, `providers`, `mailboxes`. None of it is about a lead, and
+ *     losing a mailbox's IMAP watermark would re-read the whole inbox.
+ *   - `http_cache`. Overpass and Nominatim responses, which is what makes
+ *     the re-search fast rather than another round of donated capacity.
+ *   - Tasks and events with no `lead_id`. Those belong to the engine, not to
+ *     any business, and cancelling them would stop work unrelated to the
+ *     list being cleared.
+ *
+ * A task the worker has already claimed can be deleted out from under it.
+ * That is safe by construction: every handler re-reads its lead and
+ * dead-letters when it is gone, and `completeTask` on a deleted row updates
+ * nothing.
+ */
+export function clearAllLeads(): ClearedCounts {
+  const db = getDb()
+
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    // Children first: `messages.lead_id` is a real foreign key and
+    // enforcement is on everywhere except inside a migration, so deleting
+    // the leads first would be rejected rather than cascaded.
+    const messages = toNumber(db.prepare(`DELETE FROM messages`).run().changes)
+    const tasks = toNumber(
+      db.prepare(`DELETE FROM tasks WHERE lead_id IS NOT NULL`).run().changes
+    )
+    const events = toNumber(
+      db.prepare(`DELETE FROM events WHERE lead_id IS NOT NULL`).run().changes
+    )
+    const leads = toNumber(db.prepare(`DELETE FROM leads`).run().changes)
+
+    db.exec("COMMIT")
+    return { leads, messages, tasks, events }
+  } catch (err) {
+    db.exec("ROLLBACK")
+    throw err
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Read models for the UI
 // ---------------------------------------------------------------------------

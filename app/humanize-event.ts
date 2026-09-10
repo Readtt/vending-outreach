@@ -19,6 +19,7 @@ const EVENT_LABELS: Record<string, string> = {
   // --- finding businesses -------------------------------------------------
   "leads.found": "Searched for businesses",
   "leads.imported": "Added businesses to the list",
+  "leads.cleared": "Cleared the lead list",
   "lead.enriched": "Researched a business",
   "lead.unqualified": "Skipped a business",
   "lead.to_call": "Added a business to the call list",

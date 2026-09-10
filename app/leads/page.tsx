@@ -3,6 +3,7 @@ import { EmptyState, Page, PageHeader } from "@/components/page"
 import { countLeads } from "@/lib/db"
 import { getTargetingSettings } from "../settings/data"
 import { ApprovalBanner } from "./approval-banner"
+import { ClearLeadsButton } from "./clear-leads-button"
 import { FindLocationsDialog } from "./find-locations-dialog"
 import { LeadTable } from "./lead-table"
 import { RetryAbandonedButton } from "./retry-abandoned-button"
@@ -30,6 +31,7 @@ export default function LeadsPage() {
         description="Every business found so far, and what has happened with each one."
         action={
           <div className="flex flex-wrap items-center gap-2">
+            <ClearLeadsButton count={total} />
             <RetryAbandonedButton count={abandoned} />
             <FindLocationsDialog
               typeOptions={typeOptions}

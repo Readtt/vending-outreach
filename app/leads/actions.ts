@@ -9,6 +9,7 @@
 
 import { revalidatePath } from "next/cache"
 import {
+  clearAllLeads,
   countLeads,
   enqueue,
   getLeadById,
@@ -16,8 +17,10 @@ import {
   listLeads,
   listMessagesForLead,
   listRecentEvents,
+  logEvent,
   saveSearchResult,
   updateLead,
+  type ClearedCounts,
 } from "@/lib/db"
 import { isCountry } from "@/lib/geo"
 import {
@@ -240,4 +243,23 @@ export async function retryAbandonedLeadsAction(): Promise<{
 /** How many leads that button would pick up. Drives whether it is shown. */
 export async function countAbandonedLeadsAction(): Promise<number> {
   return abandonedLeads().length
+}
+
+/**
+ * Empties the lead list so a run can be started over.
+ *
+ * Everything a search would find again is deleted; nothing that would have to
+ * be set up again is — see `clearAllLeads` for exactly what survives and why.
+ * The event is written after the delete and carries no `leadId`, so it is one
+ * of the rows that stays: the activity feed still says the list was cleared,
+ * on a Dashboard that is now otherwise empty.
+ */
+export async function clearAllLeadsAction(): Promise<ClearedCounts> {
+  const removed = clearAllLeads()
+  logEvent("leads.cleared", { detail: removed })
+  revalidatePath("/leads")
+  revalidatePath("/calls")
+  revalidatePath("/inbox")
+  revalidatePath("/")
+  return removed
 }
