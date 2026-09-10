@@ -94,6 +94,18 @@ export function getModel(providerId: string, modelId: string): LanguageModel {
     name: p.id,
     baseURL: p.base_url,
     apiKey: p.api_key ?? undefined,
+    // Without this the SDK decides the provider cannot take a JSON schema,
+    // logs "responseFormat is not supported", and sends the request with no
+    // schema at all — leaving `generateObject` to parse whatever prose comes
+    // back. Fact extraction is the only thing here that asks for an object,
+    // and on real leads it failed on eight businesses out of the sixteen that
+    // had a website, which are the only ones worth anything.
+    //
+    // Every endpoint this branch is for — OpenRouter, Groq, DeepSeek, xAI,
+    // Together, Fireworks, and local proxies — takes `response_format:
+    // json_schema` today. One that does not now says so with an error, which
+    // is a better failure than silently returning unparseable text.
+    supportsStructuredOutputs: true,
   })(modelId)
 }
 
