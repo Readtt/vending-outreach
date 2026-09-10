@@ -824,3 +824,20 @@ test("pruning never evicts the search just saved", () => {
     assert.equal(getSearchResult(id), JSON.stringify({ n: i }))
   }
 })
+
+test("foreign keys are enforced on a connection that has finished migrating", () => {
+  // Migrations run with enforcement OFF, because SQLite cannot alter a CHECK
+  // constraint and rebuilding a table means dropping one that `messages`
+  // references. That must be the only window: a connection handed to the app
+  // with enforcement still off would let orphan rows in silently.
+  assert.throws(
+    () =>
+      getDb()
+        .prepare(
+          `INSERT INTO messages (id, lead_id, direction, status, created_at)
+           VALUES (?, 'no-such-lead', 'out', 'sent', 1)`
+        )
+        .run(randomUUID()),
+    /FOREIGN KEY/i
+  )
+})

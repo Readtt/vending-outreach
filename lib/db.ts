@@ -364,9 +364,16 @@ function openDatabase(): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL")
   db.exec("PRAGMA busy_timeout = 5000") // default is 0 — instant SQLITE_BUSY
   db.exec("PRAGMA synchronous = NORMAL")
-  db.exec("PRAGMA foreign_keys = ON")
 
+  // Enforcement stays off across `migrate`, and is switched on once the schema
+  // is final. SQLite cannot alter a CHECK constraint, so changing one means
+  // rebuilding the table — and dropping a `leads` that `messages` references
+  // registers a violation that survives re-creating the rows, whether the
+  // constraint is immediate or deferred. Turning it off is what the SQLite
+  // docs prescribe for exactly this, and it cannot be done inside a
+  // transaction, which is where every migration runs.
   migrate(db)
+  db.exec("PRAGMA foreign_keys = ON")
   return db
 }
 
