@@ -553,3 +553,110 @@ test("a never-emailed lead reaches the call list with no hours since contact", (
   assert.equal(list[0].lastContactedAt, null)
   assert.equal(list[0].hoursSinceContact, null)
 })
+
+// ---------------------------------------------------------------------------
+// A site with an address but nothing worth quoting
+// ---------------------------------------------------------------------------
+
+/** Answers robots.txt, then serves the same page for anything else. */
+function siteServing(
+  html: string,
+  robots = "User-agent: *\nAllow: /"
+): typeof fetch {
+  return async (input) => {
+    const url = String(input)
+    if (url.endsWith("/robots.txt")) {
+      return new Response(robots, {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      })
+    }
+    return new Response(html, {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    })
+  }
+}
+
+test("a site with a usable address but no quotable fact still gets an email", async () => {
+  // 60% of sites yield no fact worth quoting. Dropping those threw away a
+  // business that had published a working address — the one thing that is
+  // genuinely hard to come by, and what CASL s.10(9)(b) actually turns on.
+  getDb().exec("DELETE FROM leads")
+  const lead = insertLead({
+    name: "Kingston Road Warehouse",
+    type: "warehouse",
+    phone: "+1 416-555-0170",
+    website: "https://kingstonroadwarehouse.ca",
+    source: "osm",
+    osmId: "node/910",
+  })
+
+  const outcome = await enrichLead(lead.id, {
+    fetch: siteServing(
+      `<html><body><p>Storage and logistics.</p>
+       <a href="mailto:hello@kingstonroadwarehouse.ca">Email us</a></body></html>`
+    ),
+    // The research model found nothing it could quote verbatim.
+    extractFact: async () => undefined,
+    resolveMx: async () => [
+      { exchange: "mx.kingstonroadwarehouse.ca", priority: 10 },
+    ],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    sleep: async () => {},
+  })
+
+  assert.ok(
+    outcome.status === "ready" || outcome.status === "held",
+    `expected an emailable lead, got ${outcome.status}${
+      outcome.status === "unqualified" || outcome.status === "to_call"
+        ? ` (${outcome.reason})`
+        : ""
+    }`
+  )
+  assert.equal(
+    outcome.status === "ready" || outcome.status === "held"
+      ? outcome.fact
+      : "x",
+    null
+  )
+
+  const stored = getLeadById(lead.id)
+  assert.equal(stored?.email, "hello@kingstonroadwarehouse.ca")
+  assert.equal(stored?.personalization_fact, null)
+  assert.equal(stored?.fact_category, null)
+})
+
+test("a fact the page does not contain is still thrown away", async () => {
+  // The grounding rule is untouched: a fact whose evidence span is absent
+  // means the model was writing rather than reading. It is dropped — the
+  // lead now survives that, the invented fact does not.
+  getDb().exec("DELETE FROM leads")
+  const lead = insertLead({
+    name: "Morningside Offices",
+    type: "office",
+    website: "https://morningsideoffices.ca",
+    source: "osm",
+    osmId: "node/911",
+  })
+
+  const outcome = await enrichLead(lead.id, {
+    fetch: siteServing(
+      `<html><body><p>Office space in Scarborough.</p>
+       <a href="mailto:hello@morningsideoffices.ca">Contact</a></body></html>`
+    ),
+    extractFact: async () => ({
+      fact: "Serving Scarborough since 1971",
+      category: "years_in_business",
+      evidenceSpan: "since 1971",
+    }),
+    resolveMx: async () => [
+      { exchange: "mx.morningsideoffices.ca", priority: 10 },
+    ],
+    lookup: async () => [{ address: "93.184.216.35", family: 4 }],
+    sleep: async () => {},
+  })
+
+  assert.ok(outcome.status === "ready" || outcome.status === "held")
+  assert.equal(getLeadById(lead.id)?.personalization_fact, null)
+})

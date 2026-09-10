@@ -1879,15 +1879,16 @@ export type EnrichOutcome =
   | {
       status: "ready"
       email: string
-      fact: string
-      factCategory: FactCategory
+      /** Null when the site yielded an address but nothing worth quoting. */
+      fact: string | null
+      factCategory: FactCategory | null
       score: number
     }
   | {
       status: "held"
       email: string
-      fact: string
-      factCategory: FactCategory
+      fact: string | null
+      factCategory: FactCategory | null
       score: number
     }
   | { status: "unqualified"; reason: UnqualifiedReason }
@@ -2586,51 +2587,53 @@ export async function enrichLead(
         : new Error(`fact extraction failed: ${String(err)}`)
     }
 
-    if (!extracted) {
-      return finish("no_fact", "the research model produced no fact")
-    }
+    // A missing or rejected fact is no longer the end of the lead. The email
+    // it can still send is a weaker email, and the score reflects that — a
+    // fact is worth 1-2 points and the threshold does the filtering — but a
+    // business whose site published a working address is worth writing to,
+    // and the alternative was throwing it away. What must not happen is the
+    // model being told to open on a fact it was never given: see
+    // `buildFirstEmailSystemPrompt`.
+    let fact: { text: string; category: FactCategory } | null = null
 
-    const validation = validateFact(
-      extracted.fact,
-      pageText,
-      extracted.category
-    )
-    const grounded = verifyEvidenceSpan(extracted.evidenceSpan, pageText)
-    research.fact = {
-      fact: extracted.fact,
-      category: extracted.category,
-      evidenceSpan: extracted.evidenceSpan,
-      sourceUrl: home.url,
-      accepted: validation.ok && grounded,
-      ...(validation.ok
-        ? grounded
-          ? {}
+    if (extracted) {
+      const validation = validateFact(
+        extracted.fact,
+        pageText,
+        extracted.category
+      )
+      const grounded = verifyEvidenceSpan(extracted.evidenceSpan, pageText)
+      research.fact = {
+        fact: extracted.fact,
+        category: extracted.category,
+        evidenceSpan: extracted.evidenceSpan,
+        sourceUrl: home.url,
+        accepted: validation.ok && grounded,
+        ...(validation.ok
+          ? grounded
+            ? {}
+            : {
+                rejectedBecause:
+                  "evidence_span does not appear verbatim in the source",
+              }
           : {
-              rejectedBecause:
-                "evidence_span does not appear verbatim in the source",
-            }
-        : { rejectedBecause: validation.reason ?? "validateFact rejected it" }),
+              rejectedBecause: validation.reason ?? "validateFact rejected it",
+            }),
+      }
+
+      // Spec §4's grounding rule is unchanged, and still absolute: a span the
+      // page does not contain means the model was writing rather than
+      // reading, so the "fact" beside it is dropped even if it happens to be
+      // true. The only change is that dropping it no longer drops the lead.
+      if (validation.ok && grounded) {
+        fact = {
+          text: extracted.fact,
+          category: extracted.category as FactCategory,
+        }
+      }
     }
 
-    if (!validation.ok) {
-      return finish(
-        "no_fact",
-        `validateFact rejected it: ${validation.reason ?? "unspecified"}`
-      )
-    }
-    if (!grounded) {
-      // Spec §4's grounding rule. A span the page does not contain means the
-      // model was writing rather than reading, and the "fact" beside it is
-      // not trustworthy even if it happens to match.
-      return finish(
-        "no_fact",
-        "the evidence_span does not appear verbatim in the source"
-      )
-    }
-
-    // A lead with no concrete fact is never emailed. That gate is the whole
-    // difference between this and the canned mail nobody answers.
-    const factCategory = extracted.category as FactCategory
+    const factCategory = fact?.category ?? null
 
     // --- 9. Score ----------------------------------------------------------
     const breakdown = scoreLead({
@@ -2662,7 +2665,7 @@ export async function enrichLead(
       status,
       email: chosen.email,
       contact_name: research.contactName,
-      personalization_fact: extracted.fact,
+      personalization_fact: fact?.text ?? null,
       fact_category: factCategory,
       score: breakdown.total,
       research_json: JSON.stringify(research),
@@ -2688,7 +2691,7 @@ export async function enrichLead(
     return {
       status,
       email: chosen.email,
-      fact: extracted.fact,
+      fact: fact?.text ?? null,
       factCategory,
       score: breakdown.total,
     }

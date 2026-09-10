@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
+  buildFirstEmailSystemPrompt,
   expandSpintax,
   fillTemplate,
   renderFixedReply,
@@ -119,5 +120,79 @@ test("replyClassificationSchema: rejects a missing evidence_span", () => {
       evidence_span: "",
       reason: "reason",
     })
+  )
+})
+
+// ---------------------------------------------------------------------------
+// The first email, with and without a fact
+// ---------------------------------------------------------------------------
+
+const OWNER: SenderInfo = {
+  name: "Mudasir Ahmed",
+  company: "Northview Supply Vending",
+  address: "3070 Ellesmere Rd, Scarborough, ON M1E 4C2",
+  phone: "6477679652",
+  offerTerms:
+    "a share of what the machine sells, no fees, no minimums, we stock it and fix it",
+}
+
+test("with a fact, the email is required to open on it", () => {
+  const prompt = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: true })
+
+  assert.match(
+    prompt,
+    /first two sentences must reference the one verified fact/i
+  )
+})
+
+test("with no fact, the model is never told to reference one", () => {
+  // Left in, the instruction asks for something the model was not given —
+  // which is an instruction to invent it.
+  const prompt = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: false })
+
+  assert.doesNotMatch(prompt, /the one verified fact/i)
+  assert.doesNotMatch(prompt, /fact you're given/i)
+})
+
+test("with no fact, inventing a detail is forbidden outright", () => {
+  const prompt = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: false })
+
+  assert.match(prompt, /have not been given/i)
+  assert.match(prompt, /do not invent/i)
+})
+
+test("the offer terms carry the email when nothing else can", () => {
+  // This is what makes a fact-free email worth sending: the offer is
+  // genuinely good and entirely true, so it can be stated plainly.
+  const prompt = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: false })
+
+  assert.match(prompt, /no fees, no minimums/)
+})
+
+test("every rule that keeps the email lawful survives losing the fact", () => {
+  const withFact = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: true })
+  const without = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: false })
+
+  for (const required of [
+    /plain text only/i,
+    /opt-out/i,
+    /Northview Supply Vending/,
+    /3070 Ellesmere Rd/,
+  ]) {
+    assert.match(withFact, required)
+    assert.match(
+      without,
+      required,
+      `lost from the fact-free prompt: ${required}`
+    )
+  }
+})
+
+test("a fact is assumed when the caller does not say", () => {
+  // The old signature had two arguments and every existing caller still uses
+  // it; defaulting the other way would quietly drop the grounding rule.
+  assert.equal(
+    buildFirstEmailSystemPrompt(OWNER, "CA"),
+    buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: true })
   )
 })

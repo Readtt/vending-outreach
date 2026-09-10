@@ -228,11 +228,15 @@ export function validateDraft(draft: DraftToValidate): DraftValidation {
 function systemPromptFor(
   step: SequenceStep,
   sender: SenderInfo,
-  country: Country
+  country: Country,
+  hasFact: boolean
 ): string {
   switch (step) {
     case 1:
-      return buildFirstEmailSystemPrompt(sender, country)
+      // The user turn omits the fact block when there is no fact, so the
+      // system turn has to stop asking for one — see the note on
+      // `buildFirstEmailSystemPrompt`.
+      return buildFirstEmailSystemPrompt(sender, country, { hasFact })
     case 4:
       return buildFollowUpDay4SystemPrompt(sender, country)
     case 9:
@@ -390,7 +394,12 @@ export async function handleCompose(
 
   // --- 3 + 4. Generate, validate, regenerate once --------------------------
   const generate = deps.generateText ?? generateGuardedText
-  const system = systemPromptFor(step, sender, country)
+  const system = systemPromptFor(
+    step,
+    sender,
+    country,
+    Boolean(lead.personalization_fact?.trim())
+  )
   const basePrompt = buildUserPrompt(step, lead, deps.fence)
 
   const prior = (deps.readEarliestOutbound ?? readEarliestOutbound)(leadId)

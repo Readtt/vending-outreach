@@ -87,22 +87,36 @@ export function complianceInstruction(
  * it is generated with the least human review of anything in the pipeline.
  *
  * The model is expected to receive, as the user-turn prompt, the business
- * name and exactly one verified personalization fact (see BUILD-SPEC §4 —
- * grounded, verbatim, from primary page content only). This function does
- * not accept the fact directly: that's per-lead data the caller (the
- * worker) supplies at call time, while this is the stable, sender-level
+ * name and — where one was found — one verified personalization fact (see
+ * BUILD-SPEC §4 — grounded, verbatim, from primary page content only). This
+ * function does not accept the fact directly: that's per-lead data the caller
+ * (the worker) supplies at call time, while this is the stable, sender-level
  * half of the prompt.
+ *
+ * `hasFact: false` is for a business whose site yielded a usable address but
+ * no fact worth quoting. The grounding rule has to be *replaced* rather than
+ * dropped: an instruction to open on "the one verified fact you're given",
+ * sent with no fact attached, is an instruction to make one up. What takes
+ * its place is a flat prohibition plus the offer itself, which needs no
+ * research to be worth reading — it is free to them and pays them a share.
  */
 export function buildFirstEmailSystemPrompt(
   sender: SenderInfo,
-  country: Country = "US"
+  country: Country = "US",
+  options: { hasFact?: boolean } = {}
 ): string {
+  const hasFact = options.hasFact ?? true
+  const grounding = hasFact
+    ? `- The first two sentences must reference the one verified fact you're given about this specific business. Never invent, guess, or embellish a detail you weren't given.`
+    : `- You have NOT been given any researched detail about this business, and nothing beyond its name and what kind of business it is. Do not invent, guess, or imply one — not their size, their history, their staff, their customers, how busy they are, or anything you have "noticed" or "seen". Writing as though you had looked them up is the one thing that will get this reported as spam.
+- Open by saying plainly why you are writing, and lead with what is actually on offer: the machine costs them nothing to have, and it pays them back a share of what it sells.
+- Close by making it easy to say yes — ask whether they want to hear more, or for a good time to drop by.`
   return `You write the first cold email in a short outreach sequence offering free vending machine placement to a specific local business. The offer: a vending machine installed at no cost to them${sender.offerTerms?.trim() ? `, ${sender.offerTerms.trim()}` : ", with a share of what it sells paid back to them"}.
 
 Rules, no exceptions:
 - Plain text only. No links, no images, no HTML, no tracking pixel.
 - About 80 words. Shorter is fine. Do not pad it out.
-- The first two sentences must reference the one verified fact you're given about this specific business. Never invent, guess, or embellish a detail you weren't given.
+${grounding}
 - Plain, direct, human tone — one local business owner emailing another. No hype, no exclamation points, no "I hope this email finds you well."
 - Never mention a price, a specific dollar figure, or a commitment you weren't given.
 - End with a plain opt-out line in your own words, equivalent to: "Just reply and I'll leave you alone."
