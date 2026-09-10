@@ -16,9 +16,11 @@ import {
   completeTask,
   failTask,
   getDb,
+  getLeadById,
   logEvent,
   reapExpiredLeases,
   renewSingletonLock,
+  updateLead,
   type TaskRow,
 } from "../lib/db.ts"
 import {
@@ -399,6 +401,41 @@ async function runTick(deps: EngineDeps): Promise<TickResult> {
   return result
 }
 
+/**
+ * Puts a lead back where a retry can reach it when its enrichment gives up.
+ *
+ * `enriching` is a working state, written by `enrichLead` before it starts
+ * and overwritten by whatever it concludes. If the task dies instead of
+ * concluding — four attempts against a model provider that was never logged
+ * in, which is what happened on real data — nothing overwrites it, no task
+ * remains, and the lead sits at "Researching" on the Leads page forever.
+ *
+ * Only that one state is touched. A lead that already reached a conclusion
+ * keeps it: a later task dead-lettering says nothing about a verdict that
+ * was reached before it.
+ */
+function releaseStrandedLead(
+  task: TaskRow,
+  emit: (type: string, options?: { leadId?: string; detail?: unknown }) => void
+): void {
+  if (task.kind !== "enrich" || !task.lead_id) return
+  let stranded = false
+  try {
+    if (getLeadById(task.lead_id)?.status !== "enriching") return
+    updateLead(task.lead_id, { status: "new" })
+    stranded = true
+  } catch {
+    // Never let bookkeeping turn a dead-letter into a thrown tick.
+    return
+  }
+  if (stranded) {
+    emit("lead.enrichment_abandoned", {
+      leadId: task.lead_id,
+      detail: { taskId: task.id, returnedTo: "new" },
+    })
+  }
+}
+
 async function runOneTask(
   task: TaskRow,
   deps: EngineDeps,
@@ -414,6 +451,7 @@ async function runOneTask(
   const deadLetter = (reason: string): void => {
     fail(task.id, reason, null)
     result.deadLettered++
+    releaseStrandedLead(task, emit)
     // Spec §9.4: tasks that fail repeatedly and vanish silently are how you
     // find out it has been broken for a week. This event is what the
     // observability page reads.

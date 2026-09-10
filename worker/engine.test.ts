@@ -19,7 +19,14 @@ process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 process.env.VENDING_STOP_FILE = path.join(TMP_ROOT, "STOP-does-not-exist")
 delete process.env.SEND_ENABLED
 
-import { enqueue, getDb, type TaskRow } from "../lib/db.ts"
+import {
+  enqueue,
+  getDb,
+  getLeadById,
+  insertLead,
+  updateLead,
+  type TaskRow,
+} from "../lib/db.ts"
 import {
   DEFAULT_LEASE_MS,
   RETRY_POLICIES,
@@ -553,4 +560,81 @@ test("the tick summary line names every count a human needs", () => {
   assert.match(line, /ok 2/)
   assert.match(line, /failed 1/)
   assert.match(line, /dead-lettered 1/)
+})
+
+// ---------------------------------------------------------------------------
+// A dead-lettered enrich must not strand its lead
+// ---------------------------------------------------------------------------
+
+test("a lead is not left saying 'Researching' forever when enrich dead-letters", async () => {
+  // What happened on real data: the model provider was not logged in, every
+  // attempt threw, the task dead-lettered after four tries — and the lead sat
+  // at `enriching` with no task left to move it. The Leads page said
+  // "Researching" indefinitely, and nothing would ever pick it up again.
+  clearTasks()
+  const lead = insertLead({
+    name: "Storwell Self Storage",
+    type: "storage",
+    source: "osm",
+  })
+  updateLead(lead.id, { status: "enriching" })
+  const id = enqueue("enrich", { leadId: lead.id, runAfter: 0 })
+
+  const maxAttempts = RETRY_POLICIES.enrich.maxAttempts
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    makeDue(id)
+    await tick(
+      baseDeps({
+        handlers: {
+          enrich: async () => {
+            throw new Error("Not logged in to anthropic")
+          },
+        },
+      })
+    )
+  }
+
+  assert.equal(
+    readTask(id).status,
+    "failed",
+    "the task should be dead-lettered"
+  )
+  assert.equal(
+    getLeadById(lead.id)?.status,
+    "new",
+    "a dead-lettered lead has to come back to something a retry can pick up"
+  )
+})
+
+test("dead-lettering does not drag a lead back out of a settled state", async () => {
+  // The reset is only for the transient working state. A lead that finished
+  // enrichment and then had some later task dead-letter must keep its result.
+  clearTasks()
+  const lead = insertLead({
+    name: "Guildwood Fitness",
+    type: "gym",
+    source: "osm",
+  })
+  updateLead(lead.id, { status: "contacted" })
+  const id = enqueue("enrich", { leadId: lead.id, runAfter: 0 })
+
+  for (
+    let attempt = 0;
+    attempt < RETRY_POLICIES.enrich.maxAttempts;
+    attempt++
+  ) {
+    makeDue(id)
+    await tick(
+      baseDeps({
+        handlers: {
+          enrich: async () => {
+            throw new Error("boom")
+          },
+        },
+      })
+    )
+  }
+
+  assert.equal(readTask(id).status, "failed")
+  assert.equal(getLeadById(lead.id)?.status, "contacted")
 })

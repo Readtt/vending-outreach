@@ -22,6 +22,7 @@ const EVENT_LABELS: Record<string, string> = {
   "lead.enriched": "Researched a business",
   "lead.unqualified": "Skipped a business",
   "lead.to_call": "Added a business to the call list",
+  "lead.enrichment_abandoned": "Gave up researching a business, for now",
   "osm.search": "Searched the map",
 
   // --- writing --------------------------------------------------------------
