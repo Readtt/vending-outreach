@@ -158,6 +158,32 @@ function resolveRoleModel(role: AiRole): RoleModelSetting & {
 
 const LIST_MODELS_TIMEOUT_MS = 15_000
 
+/**
+ * How long one `generateGuarded` call may take, retries included.
+ *
+ * Without it there is no bound at all: `generateObject` and `generateText`
+ * are given no signal, so a provider that accepts the connection and then
+ * stalls leaves enrichment awaiting a promise that never settles. That is not
+ * hypothetical — three leads in a real run hung here indefinitely, and Node
+ * exited with "unfinished top-level await" rather than finishing the batch.
+ *
+ * In the worker the lease would eventually expire and the task be reclaimed,
+ * so the queue recovers on its own; the process does not, and leaks a pending
+ * request every time. Generous rather than tight, because a slow reasoning
+ * model on the writer role is normal and a timeout that fires on one of those
+ * would turn a working setup into a retry loop.
+ */
+export const DEFAULT_AI_TIMEOUT_MS = 120_000
+
+/**
+ * Read per call rather than captured once, so a test can set it and so an
+ * operator running a slow local model can raise it without a rebuild.
+ */
+export function aiTimeoutMs(): number {
+  const raw = Number(process.env.VENDING_AI_TIMEOUT_MS)
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AI_TIMEOUT_MS
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit
@@ -371,6 +397,7 @@ export async function generateGuarded<T>(
         schemaName,
         system,
         prompt,
+        abortSignal: AbortSignal.timeout(aiTimeoutMs()),
       })
       const latencyMs = Date.now() - startedAt
       logEvent("ai_call", {
@@ -380,7 +407,12 @@ export async function generateGuarded<T>(
       return { object: result.object, latencyMs }
     }
 
-    const result = await generateText({ model, system, prompt })
+    const result = await generateText({
+      model,
+      system,
+      prompt,
+      abortSignal: AbortSignal.timeout(aiTimeoutMs()),
+    })
     const latencyMs = Date.now() - startedAt
     logEvent("ai_call", {
       leadId,
