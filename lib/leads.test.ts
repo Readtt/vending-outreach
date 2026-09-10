@@ -20,6 +20,7 @@ process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
   abandonedLeads,
+  judgeEmail,
   contactPageUrls,
   enrichLead,
   resetAbandonedLeads,
@@ -762,4 +763,43 @@ test("an href wrapped in stray quotes is unwrapped, not fetched as a path", () =
 
 test("an href that is only quotes is dropped", () => {
   assert.deepEqual(contactPageUrls(`<a href='""'>Contact</a>`, BASE), [])
+})
+
+// ---------------------------------------------------------------------------
+// Who not to email
+// ---------------------------------------------------------------------------
+
+test("a privacy or compliance officer is never the person to pitch", () => {
+  // Found on a real lead: privacyofficer@brimelltoyota.com was accepted and
+  // would have been sent a vending pitch. `privacy` was already on the list;
+  // `privacyofficer` slipped past it, because matching is on the whole local
+  // part. Of every wrong person at a company, this is the worst one — they
+  // are who files the CASL complaint.
+  for (const local of [
+    "privacyofficer",
+    "privacy.officer",
+    "privacyoffice",
+    "dataprotection",
+    "dpo",
+    "compliance",
+    "compliance.officer",
+  ]) {
+    const verdict = judgeEmail(
+      { email: `${local}@brimelltoyota.com`, origin: "mailto", foundOn: "p" },
+      "brimelltoyota.com"
+    )
+    assert.equal(verdict.ok, false, `${local}@ should be refused`)
+  }
+})
+
+test("an ordinary inbox that merely contains a role word is still fine", () => {
+  // "info" and "sales" are exactly who we want, and a person's name must
+  // never be caught by a substring rule.
+  for (const local of ["info", "sales", "hello", "privacypolicyteam.dave"]) {
+    const verdict = judgeEmail(
+      { email: `${local}@brimelltoyota.com`, origin: "mailto", foundOn: "p" },
+      "brimelltoyota.com"
+    )
+    assert.equal(verdict.ok, true, `${local}@ should be allowed`)
+  }
 })

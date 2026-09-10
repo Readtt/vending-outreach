@@ -964,6 +964,17 @@ export const ROLE_LOCAL_PARTS: ReadonlySet<string> = new Set([
   "mailerdaemon",
   "bounces",
   "bounce",
+  // The office that answers a privacy complaint is the worst possible
+  // recipient of a cold pitch, and the likeliest to answer it with one.
+  // `privacy` was already here; a real lead published `privacyofficer@`,
+  // which is a different string and sailed through.
+  "privacyofficer",
+  "privacyoffice",
+  "dataprotection",
+  "dataprotectionofficer",
+  "dpo",
+  "compliance",
+  "complianceofficer",
 ])
 
 /**
