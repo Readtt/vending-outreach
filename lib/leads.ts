@@ -892,7 +892,7 @@ export function primaryPageText(html: string): string {
 // Email extraction (spec §4, as amended by the brief's step 5)
 // ---------------------------------------------------------------------------
 
-export type EmailOrigin = "mailto" | "page_text" | "osm_tag"
+export type EmailOrigin = "mailto" | "encoded" | "page_text" | "osm_tag"
 
 export interface EmailCandidate {
   email: string
@@ -1053,11 +1053,115 @@ function extractMailtoEmails(html: string, foundOn: string): EmailCandidate[] {
 
 function extractTextEmails(text: string, foundOn: string): EmailCandidate[] {
   const out: EmailCandidate[] = []
-  for (const match of text.matchAll(EMAIL_IN_TEXT)) {
+  for (const match of deobfuscateEmailText(text).matchAll(EMAIL_IN_TEXT)) {
     // A trailing dot is sentence punctuation, not part of the address.
     const email = normalizeEmail(match[0].replace(/[.,;:]+$/, ""))
     if (email.length > 0) out.push({ email, origin: "page_text", foundOn })
   }
+  return out
+}
+
+/** `[at]`, `(dot)`, `&commat;` — bracketed, so rewriting them is unambiguous. */
+const BRACKETED_AT = /\s*[[({]\s*(?:at|@)\s*[\])}]\s*/gi
+const BRACKETED_DOT = /\s*[[({]\s*(?:dot|\.)\s*[\])}]\s*/gi
+
+/**
+ * `hello AT gym DOT ca` — the bare-word form, matched only as a whole address.
+ *
+ * Requiring a "dot" run after the "at" is what keeps this off ordinary prose:
+ * "we are at the corner of Kingston and Morningside" has an `at` and no `dot`,
+ * so it never matches, while an address spelled out to dodge scrapers always
+ * has both.
+ */
+const SPELLED_ADDRESS =
+  /\b([A-Za-z0-9._%+-]+)\s+at\s+([A-Za-z0-9-]+(?:\s+dot\s+[A-Za-z0-9-]+)+)\b/gi
+
+/**
+ * Puts a deliberately mangled address back together, so the ordinary text
+ * scan can see it.
+ *
+ * A business that writes its address this way is still publishing it — which
+ * is the thing CASL s.10(9)(b) asks about — it is just trying not to be read
+ * by a naive regex. Nothing here invents an address: every rewrite needs
+ * markers a human reads as "at" and "dot" in the first place.
+ */
+export function deobfuscateEmailText(text: string): string {
+  return text
+    .replace(/&commat;/gi, "@")
+    .replace(/&period;/gi, ".")
+    .replace(BRACKETED_AT, "@")
+    .replace(BRACKETED_DOT, ".")
+    .replace(
+      SPELLED_ADDRESS,
+      (_whole, local: string, domain: string) =>
+        `${local}@${domain.replace(/\s+dot\s+/gi, ".")}`
+    )
+}
+
+/** Cloudflare's email obfuscation: first byte is the XOR key, rest the address. */
+function decodeCfEmail(hex: string): string {
+  if (hex.length < 4 || hex.length % 2 !== 0) return ""
+  const key = Number.parseInt(hex.slice(0, 2), 16)
+  if (!Number.isFinite(key)) return ""
+  let out = ""
+  for (let i = 2; i < hex.length; i += 2) {
+    const byte = Number.parseInt(hex.slice(i, i + 2), 16)
+    if (!Number.isFinite(byte)) return ""
+    out += String.fromCharCode(byte ^ key)
+  }
+  return out
+}
+
+const CF_EMAIL = /data-cfemail\s*=\s*["']([0-9a-fA-F]+)["']/gi
+const LD_JSON_BLOCK =
+  /<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+const LD_JSON_EMAIL = /"email"\s*:\s*"(?:mailto:)?([^"]+)"/gi
+const DATA_EMAIL_ATTR =
+  /data-(?:email|mail)\s*=\s*["'](?:mailto:)?([^"']+)["']/gi
+
+/** Rejects the debris the patterns above can produce before it reaches judging. */
+function looksLikeAddress(email: string): boolean {
+  return EMAIL_SYNTAX.test(email)
+}
+
+/**
+ * Addresses the page publishes in markup that a text pass never sees.
+ *
+ * Three sources, all of them the business stating its own address in its own
+ * HTML, which is why they rank alongside a `mailto:` rather than below it:
+ *
+ *   - Cloudflare's `data-cfemail`, which replaces a real `mailto:` with hex
+ *     and rebuilds it in JavaScript. Common enough on small business sites to
+ *     be the single biggest blind spot here.
+ *   - JSON-LD, which `htmlToText` cannot help with because it drops every
+ *     `<script>` body wholesale — deliberately, since that is where an
+ *     injected instruction would hide.
+ *   - `data-email` attributes behind an "Email us" button.
+ */
+export function extractEncodedEmails(
+  html: string,
+  foundOn: string
+): EmailCandidate[] {
+  const out: EmailCandidate[] = []
+  const seen = new Set<string>()
+
+  const add = (raw: string): void => {
+    const email = normalizeEmail(raw.trim())
+    if (email.length === 0 || seen.has(email) || !looksLikeAddress(email))
+      return
+    seen.add(email)
+    out.push({ email, origin: "encoded", foundOn })
+  }
+
+  for (const match of html.matchAll(CF_EMAIL))
+    add(decodeCfEmail(match[1] ?? ""))
+  for (const block of html.matchAll(LD_JSON_BLOCK)) {
+    for (const found of (block[1] ?? "").matchAll(LD_JSON_EMAIL)) {
+      add(found[1] ?? "")
+    }
+  }
+  for (const match of html.matchAll(DATA_EMAIL_ATTR)) add(match[1] ?? "")
+
   return out
 }
 
@@ -1154,8 +1258,9 @@ export function judgeEmail(
     // Not a known generic: reads like a person, which is the best case.
     rank = 0
   }
-  // A `mailto:` link is a stronger signal than a string that merely looks
-  // like an address in body copy.
+  // A `mailto:` link — or an address the page states in its own markup, which
+  // is what "encoded" means — is a stronger signal than a string that merely
+  // looks like an address in body copy.
   if (candidate.origin === "page_text") rank += 0.5
   if (candidate.origin === "osm_tag") rank += 1
 
@@ -2055,7 +2160,11 @@ export async function enrichLead(
     // --- 5. Extract and judge emails --------------------------------------
     const candidates: EmailCandidate[] = []
     for (const page of fetched) {
+      // Ordered strongest first: the dedupe below keeps whichever origin is
+      // seen first, and `mailto:` beats the same address dug out of markup,
+      // which in turn beats it appearing in body copy.
       candidates.push(...extractMailtoEmails(page.html, page.url))
+      candidates.push(...extractEncodedEmails(page.html, page.url))
       candidates.push(...extractTextEmails(htmlToText(page.html), page.url))
     }
     // CASL's implied consent (s.10(9)(b)) rests on the *recipient* having

@@ -18,7 +18,11 @@ import path from "node:path"
 const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-leads-test-"))
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
-import { findLocations } from "./leads.ts"
+import {
+  deobfuscateEmailText,
+  extractEncodedEmails,
+  findLocations,
+} from "./leads.ts"
 import { closeDb, getDb, insertLead } from "./db.ts"
 
 assert.ok(
@@ -199,4 +203,106 @@ test("a business already imported is the one thing that is not new", async () =>
   assert.equal(result.totalFound, 2)
   assert.equal(result.distinctFound, 2)
   assert.equal(result.newCount, 1, "one of the two is already a lead")
+})
+
+// ---------------------------------------------------------------------------
+// Email indicators a plain text pass never sees
+// ---------------------------------------------------------------------------
+
+const CF = "2b434e4747446b58484a59494459445e4c434c524605484a"
+
+test("a Cloudflare-obfuscated address is decoded", () => {
+  // Cloudflare rewrites a real mailto into this and reassembles it in JS, so
+  // the address is on the page for a visitor and invisible to us. It is one
+  // of the most common ways a small business site hides its own address.
+  const html = `<a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="${CF}">[email&#160;protected]</a>`
+
+  const found = extractEncodedEmails(html, "https://scarboroughgym.ca/")
+
+  assert.deepEqual(
+    found.map((c) => c.email),
+    ["hello@scarboroughgym.ca"]
+  )
+  assert.equal(found[0].origin, "encoded")
+  assert.equal(found[0].foundOn, "https://scarboroughgym.ca/")
+})
+
+test("a malformed cfemail is skipped rather than yielding rubbish", () => {
+  for (const bad of ["", "2b", "zz4344", "2b4"]) {
+    const html = `<span class="__cf_email__" data-cfemail="${bad}"></span>`
+    assert.deepEqual(extractEncodedEmails(html, "p"), [], `for "${bad}"`)
+  }
+})
+
+test("an address in JSON-LD is found", () => {
+  // htmlToText drops <script> contents wholesale, so structured data is
+  // invisible to the text scan even though it is the single most reliable
+  // place a business states its own address.
+  const html = `<script type="application/ld+json">
+    {"@type":"LocalBusiness","name":"Guildwood Storage","email":"info@guildwoodstorage.ca"}
+  </script>`
+
+  assert.deepEqual(
+    extractEncodedEmails(html, "p").map((c) => c.email),
+    ["info@guildwoodstorage.ca"]
+  )
+})
+
+test("JSON-LD with a mailto: value still yields a bare address", () => {
+  const html = `<script type="application/ld+json">{"email":"mailto:ops@ellesmere.ca"}</script>`
+
+  assert.deepEqual(
+    extractEncodedEmails(html, "p").map((c) => c.email),
+    ["ops@ellesmere.ca"]
+  )
+})
+
+test("a data-email attribute is found", () => {
+  const html = `<button data-email="book@morningsideclinic.ca">Email us</button>`
+
+  assert.deepEqual(
+    extractEncodedEmails(html, "p").map((c) => c.email),
+    ["book@morningsideclinic.ca"]
+  )
+})
+
+test("encoded sources dedupe within a page", () => {
+  const html =
+    `<span class="__cf_email__" data-cfemail="${CF}"></span>` +
+    `<b data-email="hello@scarboroughgym.ca"></b>`
+
+  assert.equal(extractEncodedEmails(html, "p").length, 1)
+})
+
+test("a page with none of these yields nothing", () => {
+  assert.deepEqual(
+    extractEncodedEmails("<p>call us on 416-555-0100</p>", "p"),
+    []
+  )
+})
+
+test("spelled-out addresses are put back together", () => {
+  // What a site writes when it is trying to dodge scrapers. A human reads
+  // every one of these as an address.
+  const cases: [string, string][] = [
+    ["hello [at] gym [dot] ca", "hello@gym.ca"],
+    ["hello (at) gym (dot) ca", "hello@gym.ca"],
+    ["hello AT gym DOT ca", "hello@gym.ca"],
+    ["hello&commat;gym.ca", "hello@gym.ca"],
+    ["hello [at] gym.ca", "hello@gym.ca"],
+  ]
+  for (const [input, expected] of cases) {
+    assert.match(
+      deobfuscateEmailText(input),
+      new RegExp(expected.replace(".", "\.")),
+      `"${input}" should read as ${expected}`
+    )
+  }
+})
+
+test("deobfuscation leaves ordinary prose alone", () => {
+  // "at" and "dot" are ordinary words; rewriting them mid-sentence would
+  // manufacture addresses out of copy that never had one.
+  const prose = "Open at 9. We are at the corner of Kingston and Morningside."
+  assert.equal(deobfuscateEmailText(prose), prose)
 })
