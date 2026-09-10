@@ -196,3 +196,14 @@ test("a fact is assumed when the caller does not say", () => {
     buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: true })
   )
 })
+
+test("with no fact, the direction of the email is stated outright", () => {
+  // A real draft from a weak model opened "Thank you for reaching out to
+  // TEVA" — it wrote a reply *from* the business instead of a cold email
+  // *to* them. With a fact in hand the model stays oriented; without one
+  // there is nothing anchoring who is writing to whom, so the prompt says it.
+  const prompt = buildFirstEmailSystemPrompt(OWNER, "CA", { hasFact: false })
+
+  assert.match(prompt, /writing TO this business, cold/i)
+  assert.match(prompt, /never write as though answering them/i)
+})

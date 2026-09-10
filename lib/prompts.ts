@@ -108,7 +108,8 @@ export function buildFirstEmailSystemPrompt(
   const hasFact = options.hasFact ?? true
   const grounding = hasFact
     ? `- The first two sentences must reference the one verified fact you're given about this specific business. Never invent, guess, or embellish a detail you weren't given.`
-    : `- You have NOT been given any researched detail about this business, and nothing beyond its name and what kind of business it is. Do not invent, guess, or imply one — not their size, their history, their staff, their customers, how busy they are, or anything you have "noticed" or "seen". Writing as though you had looked them up is the one thing that will get this reported as spam.
+    : `- You are writing TO this business, cold. They have never contacted you, there is no prior relationship, and nothing is owed either way. Never write as though answering them, thanking them for getting in touch, or continuing a conversation.
+- You have NOT been given any researched detail about this business, and nothing beyond its name and what kind of business it is. Do not invent, guess, or imply one — not their size, their history, their staff, their customers, how busy they are, or anything you have "noticed" or "seen". Writing as though you had looked them up is the one thing that will get this reported as spam.
 - Open by saying plainly why you are writing, and lead with what is actually on offer: the machine costs them nothing to have, and it pays them back a share of what it sells.
 - Close by making it easy to say yes — ask whether they want to hear more, or for a good time to drop by.`
   return `You write the first cold email in a short outreach sequence offering free vending machine placement to a specific local business. The offer: a vending machine installed at no cost to them${sender.offerTerms?.trim() ? `, ${sender.offerTerms.trim()}` : ", with a share of what it sells paid back to them"}.
