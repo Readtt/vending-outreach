@@ -1858,6 +1858,23 @@ export type UnqualifiedReason =
   | "no_fact"
   | "low_score"
 
+/**
+ * The reasons that close the email channel without saying anything about the
+ * business itself — so a phone number makes them a call instead of a dead end.
+ *
+ * Deliberately not the whole list. `suppressed` means they asked us to stop,
+ * which is a decision about being contacted at all rather than about email.
+ * `low_score` and `email_rejected` mean we looked and judged, and phoning
+ * would just be ignoring the judgement. `robots_disallowed` is a site saying
+ * "do not crawl me", which is a close enough signal to leave alone.
+ */
+const CALLABLE_INSTEAD: ReadonlySet<UnqualifiedReason> = new Set([
+  "no_website",
+  "no_email",
+  "no_mx",
+  "unreachable",
+])
+
 export type EnrichOutcome =
   | {
       status: "ready"
@@ -1874,6 +1891,8 @@ export type EnrichOutcome =
       score: number
     }
   | { status: "unqualified"; reason: UnqualifiedReason }
+  /** No address to email, but a phone number to ring. See `CALLABLE_INSTEAD`. */
+  | { status: "to_call"; reason: UnqualifiedReason }
 
 interface ResearchRecord {
   osm?: OsmResearch
@@ -2300,14 +2319,26 @@ export async function enrichLead(
   }
 
   const finish = (reason: UnqualifiedReason, detail: string): EnrichOutcome => {
-    research.outcome = `unqualified:${reason}`
+    // The email channel is closed for this lead. Whether that is the end of it
+    // depends on whether a phone number came off the map: the Calls page works
+    // a lead with nothing but a name and a number, so "we could not find an
+    // address" is a reason to phone, not a reason to give up.
+    const phone = lead.phone?.trim()
+    const callable =
+      CALLABLE_INSTEAD.has(reason) && phone !== undefined && phone.length > 0
+    const status = callable ? "to_call" : "unqualified"
+
+    research.outcome = `${status}:${reason}`
     research.reason = detail
     updateLead(leadId, {
-      status: "unqualified",
+      status,
       research_json: JSON.stringify(research),
     })
-    logEvent("lead.unqualified", { leadId, detail: { reason, detail } })
-    return { status: "unqualified", reason }
+    logEvent(callable ? "lead.to_call" : "lead.unqualified", {
+      leadId,
+      detail: { reason, detail },
+    })
+    return { status, reason }
   }
 
   // A lead already suppressed (or already past the funnel) must not be

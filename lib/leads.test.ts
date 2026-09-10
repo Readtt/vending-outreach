@@ -20,6 +20,7 @@ process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
   contactPageUrls,
+  enrichLead,
   deobfuscateEmailText,
   extractEncodedEmails,
   findLocations,
@@ -27,7 +28,7 @@ import {
   parseSitemapUrls,
 } from "./leads.ts"
 import { parseRobots } from "./leads.ts"
-import { closeDb, getDb, insertLead } from "./db.ts"
+import { closeDb, getDb, getLeadById, insertLead, listCallList } from "./db.ts"
 
 assert.ok(
   process.env.VENDING_DB_PATH?.includes("vending-leads-test-"),
@@ -456,4 +457,99 @@ test("rubbish where a sitemap should be yields nothing, never a throw", () => {
   for (const junk of ["", "<html><body>404</body></html>", "not xml at all"]) {
     assert.deepEqual(parseSitemapUrls(junk), [], JSON.stringify(junk))
   }
+})
+
+// ---------------------------------------------------------------------------
+// A business we cannot email but can phone
+// ---------------------------------------------------------------------------
+
+const forbiddenFetch: typeof fetch = async () => {
+  throw new Error("no test may reach the network")
+}
+
+test("no website but a phone number makes a call, not a dead end", async () => {
+  getDb().exec("DELETE FROM leads")
+  const lead = insertLead({
+    name: "Ellesmere Auto Repair",
+    type: "car_repair",
+    phone: "+1 416-555-0142",
+    source: "osm",
+    osmId: "node/900",
+  })
+
+  const outcome = await enrichLead(lead.id, { fetch: forbiddenFetch })
+
+  assert.equal(outcome.status, "to_call")
+  assert.equal(getLeadById(lead.id)?.status, "to_call")
+})
+
+test("no website and no phone is still a dead end", async () => {
+  // Nothing to reach them by at all. Calling it "to call" would put a row on
+  // the Calls page with no number on it.
+  getDb().exec("DELETE FROM leads")
+  const lead = insertLead({
+    name: "Guildwood Storage",
+    type: "storage",
+    source: "osm",
+    osmId: "node/901",
+  })
+
+  const outcome = await enrichLead(lead.id, { fetch: forbiddenFetch })
+
+  assert.equal(outcome.status, "unqualified")
+  assert.equal(getLeadById(lead.id)?.status, "unqualified")
+})
+
+test("a suppressed business is never phoned instead", async () => {
+  // "Stop contacting me" is about being contacted, not about email, so it
+  // must not be answered by picking up the phone.
+  getDb().exec("DELETE FROM leads")
+  const lead = insertLead({
+    name: "Morningside Clinic",
+    type: "clinic",
+    phone: "+1 416-555-0199",
+    source: "osm",
+    osmId: "node/902",
+  })
+  getDb()
+    .prepare(`UPDATE leads SET status = 'suppressed' WHERE id = ?`)
+    .run(lead.id)
+
+  const outcome = await enrichLead(lead.id, { fetch: forbiddenFetch })
+
+  assert.equal(outcome.status, "unqualified")
+})
+
+test("a never-emailed lead reaches the call list with no hours since contact", () => {
+  getDb().exec("DELETE FROM leads")
+  const callable = insertLead({
+    name: "Kingston Road Gym",
+    type: "gym",
+    phone: "+1 416-555-0110",
+    source: "osm",
+    osmId: "node/903",
+  })
+  getDb()
+    .prepare(`UPDATE leads SET status = 'to_call' WHERE id = ?`)
+    .run(callable.id)
+
+  // Same status, no phone: there is nothing to ring, so it stays off the list.
+  const unreachable = insertLead({
+    name: "No Phone Storage",
+    type: "storage",
+    source: "osm",
+    osmId: "node/904",
+  })
+  getDb()
+    .prepare(`UPDATE leads SET status = 'to_call' WHERE id = ?`)
+    .run(unreachable.id)
+
+  const list = listCallList()
+
+  assert.deepEqual(
+    list.map((e) => e.lead.id),
+    [callable.id]
+  )
+  assert.equal(list[0].lastContactedAt, null)
+  assert.equal(list[0].hoursSinceContact, null)
 })

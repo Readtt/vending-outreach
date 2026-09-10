@@ -315,6 +315,65 @@ const migrations: Migration[] = [
       );
     `)
   },
+  // Migration 6: a business we cannot email but can phone is a lead, not a
+  // dead end.
+  //
+  // Roughly 78% of what a search finds has no email address anywhere — no
+  // website to scrape and no `contact:email` tag — and all of it was landing
+  // as `unqualified`, which the Leads page says in red as "Not a fit". Around
+  // one in nine of those does have a phone number, and the Calls page already
+  // knows how to work a lead with nothing but a name and a number: its script
+  // prompt is fact-agnostic by design.
+  //
+  // `to_call` sits where `ready` sits — a lead waiting on an action, but a
+  // call rather than an email. The four call outcomes already map onto
+  // `replied`/`contacted`/`dead`/`hot`, so nothing downstream needs teaching.
+  //
+  // The table is rebuilt because SQLite cannot alter a CHECK constraint. The
+  // column list is spelled out rather than `SELECT *` so a future column
+  // added ahead of this migration cannot silently shift into the wrong slot,
+  // and enforcement of the `messages` foreign key is off for the whole of
+  // `migrate` (see `openDatabase`), which is what lets the old table go.
+  (db) => {
+    db.exec(`
+      CREATE TABLE leads_new (
+        id                    TEXT PRIMARY KEY,
+        name                  TEXT,
+        type                  TEXT,
+        address               TEXT,
+        phone                 TEXT,
+        website               TEXT,
+        lat                   REAL,
+        lng                   REAL,
+        timezone              TEXT,
+        email                 TEXT,
+        contact_name          TEXT,
+        status                TEXT NOT NULL DEFAULT 'new' CHECK (status IN (
+                                 'new','enriching','ready','held','to_call',
+                                 'contacted','replied','hot','won','dead',
+                                 'unqualified','suppressed'
+                               )),
+        score                 INTEGER DEFAULT 0,
+        research_json         TEXT,
+        personalization_fact  TEXT,
+        fact_category         TEXT,
+        source                TEXT,
+        osm_id                TEXT UNIQUE,
+        created_at            INTEGER,
+        country               TEXT CHECK (country IN ('US','CA'))
+      );
+
+      INSERT INTO leads_new
+        SELECT id, name, type, address, phone, website, lat, lng, timezone,
+               email, contact_name, status, score, research_json,
+               personalization_fact, fact_category, source, osm_id,
+               created_at, country
+          FROM leads;
+
+      DROP TABLE leads;
+      ALTER TABLE leads_new RENAME TO leads;
+    `)
+  },
 ]
 
 /**
@@ -365,13 +424,18 @@ function openDatabase(): DatabaseSync {
   db.exec("PRAGMA busy_timeout = 5000") // default is 0 — instant SQLITE_BUSY
   db.exec("PRAGMA synchronous = NORMAL")
 
-  // Enforcement stays off across `migrate`, and is switched on once the schema
-  // is final. SQLite cannot alter a CHECK constraint, so changing one means
+  // Enforcement is turned off across `migrate` and back on once the schema is
+  // final. SQLite cannot alter a CHECK constraint, so changing one means
   // rebuilding the table — and dropping a `leads` that `messages` references
   // registers a violation that survives re-creating the rows, whether the
   // constraint is immediate or deferred. Turning it off is what the SQLite
   // docs prescribe for exactly this, and it cannot be done inside a
   // transaction, which is where every migration runs.
+  //
+  // The OFF is explicit because `node:sqlite` turns enforcement on when the
+  // connection is constructed, so a migration would otherwise never see it
+  // off no matter where the ON below sits.
+  db.exec("PRAGMA foreign_keys = OFF")
   migrate(db)
   db.exec("PRAGMA foreign_keys = ON")
   return db
@@ -416,6 +480,7 @@ export const LEAD_STATUSES = [
   "enriching",
   "ready",
   "held",
+  "to_call",
   "contacted",
   "replied",
   "hot",
@@ -1529,12 +1594,15 @@ export function listInboxThreads(limit = 100): InboxThread[] {
 
 export interface CallListEntry {
   lead: LeadRow
-  lastContactedAt: number
-  hoursSinceContact: number
+  /** Null for a lead that was never emailable, so was never emailed. */
+  lastContactedAt: number | null
+  /** Null for the same reason — there is no contact to be hours since. */
+  hoursSinceContact: number | null
 }
 
 /**
- * Leads worth phoning: contacted, still silent, and reachable by phone.
+ * Leads worth phoning: either contacted and still silent, or never reachable
+ * by email at all.
  *
  * The window is 18–96 hours rather than literally "yesterday". This app only
  * runs while the user has it open, so a strict calendar-day rule would silently
@@ -1556,6 +1624,11 @@ export function listCallList(
 ): CallListEntry[] {
   const minHours = options.minHours ?? 18
   const maxHours = options.maxHours ?? 96
+  // Two ways onto this list. The original: emailed, and gone quiet inside the
+  // window. The second: never emailable at all — no address exists for them —
+  // but a phone number does, so the call is the whole outreach rather than a
+  // nudge after one. Those have no `last_sent`, which is what
+  // `lastContactedAt: null` means downstream.
   const rows = getDb()
     .prepare(
       `SELECT l.*, MAX(m.sent_at) AS last_sent
@@ -1572,13 +1645,21 @@ export function listCallList(
         GROUP BY l.id
        HAVING last_sent IS NOT NULL
           AND last_sent <= ? AND last_sent >= ?
+
+        UNION ALL
+
+       SELECT l.*, NULL AS last_sent
+         FROM leads l
+        WHERE l.phone IS NOT NULL AND trim(l.phone) <> ''
+          AND l.status = 'to_call'
+
         ORDER BY last_sent ASC`
     )
     .all(
       now - minHours * 3600_000,
       now - maxHours * 3600_000
     ) as unknown as (LeadRow & {
-    last_sent: number
+    last_sent: number | null
   })[]
 
   return rows.map((row) => {
@@ -1586,7 +1667,8 @@ export function listCallList(
     return {
       lead: lead as LeadRow,
       lastContactedAt: last_sent,
-      hoursSinceContact: Math.floor((now - last_sent) / 3600_000),
+      hoursSinceContact:
+        last_sent === null ? null : Math.floor((now - last_sent) / 3600_000),
     }
   })
 }

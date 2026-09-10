@@ -12,13 +12,14 @@ export default function CallsPage() {
     <Page>
       <PageHeader
         title="Calls"
-        description="Businesses you emailed a day or two ago that have gone quiet, and have a phone number."
+        description="Businesses with a phone number worth ringing — the ones you emailed a day or two ago who have gone quiet, and the ones no email address exists for at all."
       />
 
       {items.length === 0 ? (
         <EmptyState title="Nobody to call right now.">
-          This fills in about a day after emails go out, once someone has not
-          replied.
+          This fills in as businesses are researched — immediately for the ones
+          with a phone number and no email address anywhere, and about a day
+          after emails go out for the ones who have not replied.
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-4">

@@ -66,7 +66,9 @@ export function CallCard({ item }: { item: CallListItem }) {
           <p className="text-xs text-muted-foreground">
             {[item.type, item.location].filter(Boolean).join(" · ")}
             {item.type || item.location ? " · " : ""}
-            last emailed {formatElapsed(item.hoursSinceContact)} ago
+            {item.hoursSinceContact === null
+              ? "no email address to be found — this call is the first contact"
+              : `last emailed ${formatElapsed(item.hoursSinceContact)} ago`}
           </p>
         </div>
         <a

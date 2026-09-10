@@ -10,7 +10,11 @@ export interface CallListItem {
   phone: string
   /** "Columbus, OH" — the caller wants to know whose morning this is. */
   location: string
-  hoursSinceContact: number
+  /**
+   * Null for a lead that was never emailable — no address exists for it — so
+   * the call is the whole outreach rather than a nudge after an email.
+   */
+  hoursSinceContact: number | null
   fact: string | null
   lastEmailSubject: string | null
   lastEmailBody: string | null

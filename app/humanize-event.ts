@@ -21,6 +21,7 @@ const EVENT_LABELS: Record<string, string> = {
   "leads.imported": "Added businesses to the list",
   "lead.enriched": "Researched a business",
   "lead.unqualified": "Skipped a business",
+  "lead.to_call": "Added a business to the call list",
   "osm.search": "Searched the map",
 
   // --- writing --------------------------------------------------------------
