@@ -748,3 +748,18 @@ test("resetting sends them back to new and reports which", () => {
   // And a second press finds nothing left to do.
   assert.deepEqual(resetAbandonedLeads(), [])
 })
+
+test("an href wrapped in stray quotes is unwrapped, not fetched as a path", () => {
+  // Seen on a real site: <a href='"https://host/connect/"'>. Resolved as-is
+  // it becomes host/%22https:/host/connect/%22 — a guaranteed 404 that still
+  // costs a request and one of the five pages we allow ourselves.
+  const html = `<a href='"https://guildwoodgym.ca/connect/"'>Contact</a>`
+
+  assert.deepEqual(contactPageUrls(html, BASE), [
+    "https://guildwoodgym.ca/connect/",
+  ])
+})
+
+test("an href that is only quotes is dropped", () => {
+  assert.deepEqual(contactPageUrls(`<a href='""'>Contact</a>`, BASE), [])
+})

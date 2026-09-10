@@ -2136,11 +2136,22 @@ function labelTier(rawText: string): number {
  * see. The label pass reads the link's visible text, which is the only
  * signal left on a site whose URLs are opaque ids.
  */
+/**
+ * Strips quote characters a site left inside the attribute value itself, as
+ * in `<a href='"https://host/connect/"'>`. Resolved with them attached the
+ * whole thing reads as a relative path and becomes `host/%22https:/...%22` —
+ * a certain 404 that still costs a request and one of the five pages.
+ */
+function unwrapHref(href: string): string {
+  return href.trim().replace(/^["'\s]+|["'\s]+$/g, "")
+}
+
 export function contactPageUrls(html: string, base: URL): string[] {
   const best = new Map<string, number>()
 
-  const consider = (href: string, tier: number): void => {
+  const consider = (rawHref: string, tier: number): void => {
     if (tier < 0) return
+    const href = unwrapHref(rawHref)
     if (href.length === 0 || /^(?:mailto|tel|javascript|data):/i.test(href)) {
       return
     }
@@ -2161,7 +2172,8 @@ export function contactPageUrls(html: string, base: URL): string[] {
   }
 
   for (const match of html.matchAll(HREF_ATTRIBUTE)) {
-    const href = (match[1] ?? match[2] ?? match[3] ?? "").trim()
+    const href = unwrapHref(match[1] ?? match[2] ?? match[3] ?? "")
+    if (href.length === 0) continue
     let pathname: string
     try {
       pathname = new URL(href, base).pathname
