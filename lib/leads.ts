@@ -523,10 +523,30 @@ async function readCapped(
  * `http://169.254.169.254/latest/meta-data/` without asking, which makes the
  * first-hop check theatre. Three hops maximum.
  */
+/**
+ * What a fetch will accept back. A sitemap is served as XML, and everything
+ * else this module asks for is a page, but both need the same SSRF guard,
+ * redirect validation and size cap — so they differ by content type only.
+ */
+const ACCEPTABLE = {
+  html: {
+    header: "text/html,application/xhtml+xml",
+    pattern: HTML_CONTENT_TYPE,
+    label: "HTML",
+  },
+  xml: {
+    header: "application/xml,text/xml",
+    pattern: /^\s*(?:application|text)\/(?:[a-z.+-]*\+)?xml\b/i,
+    label: "XML",
+  },
+} as const
+
 async function fetchHtml(
   rawUrl: string,
-  deps: ResolvedDeps
+  deps: ResolvedDeps,
+  accepting: keyof typeof ACCEPTABLE = "html"
 ): Promise<FetchedPage> {
+  const acceptable = ACCEPTABLE[accepting]
   let target = await assertSafeUrlWith(rawUrl, deps)
   const redirects: string[] = []
 
@@ -542,7 +562,7 @@ async function fetchHtml(
           method: "GET",
           headers: {
             "User-Agent": userAgent(),
-            Accept: "text/html,application/xhtml+xml",
+            Accept: acceptable.header,
             "Accept-Language": "en-US,en;q=0.9",
           },
           redirect: "manual",
@@ -596,11 +616,11 @@ async function fetchHtml(
       }
 
       const contentType = res.headers.get("content-type")
-      if (contentType !== null && !HTML_CONTENT_TYPE.test(contentType)) {
+      if (contentType !== null && !acceptable.pattern.test(contentType)) {
         // A PDF or a 40MB video is not a contact page.
         throw new ScrapeError(
           "refused",
-          `${requested.href} served "${contentType}", which is not HTML`
+          `${requested.href} served "${contentType}", which is not ${acceptable.label}`
         )
       }
 
@@ -650,6 +670,12 @@ export interface RobotsRules {
   disallowsAll: boolean
   crawlDelayMs: number
   allows(pathname: string): boolean
+  /**
+   * Every `Sitemap:` line, in the order given. Group-independent in the
+   * standard — it belongs to the file, not to a `User-agent` block — so it is
+   * read before any group is chosen.
+   */
+  sitemaps: string[]
 }
 
 function patternToRegExp(pattern: string): RegExp {
@@ -673,6 +699,7 @@ function patternToRegExp(pattern: string): RegExp {
 export function parseRobots(text: string, agent = ROBOTS_AGENT): RobotsRules {
   const groups = new Map<string, RobotsRule[]>()
   const crawlDelays = new Map<string, number>()
+  const sitemaps: string[] = []
 
   let currentAgents: string[] = []
   let expectingAgents = false
@@ -684,6 +711,12 @@ export function parseRobots(text: string, agent = ROBOTS_AGENT): RobotsRules {
     if (colon < 0) continue
     const field = line.slice(0, colon).trim().toLowerCase()
     const value = line.slice(colon + 1).trim()
+
+    // Not part of any group, so it is read before one is picked.
+    if (field === "sitemap") {
+      if (value.length > 0) sitemaps.push(value)
+      continue
+    }
 
     if (field === "user-agent") {
       if (!expectingAgents) {
@@ -753,7 +786,7 @@ export function parseRobots(text: string, agent = ROBOTS_AGENT): RobotsRules {
     return best === undefined ? true : best.allow
   }
 
-  return { disallowsAll: !allows("/"), crawlDelayMs, allows }
+  return { disallowsAll: !allows("/"), crawlDelayMs, allows, sitemaps }
 }
 
 /** Fetched once per origin and cached in `http_cache` (migration 2's own
@@ -1893,27 +1926,261 @@ function readOsmResearch(lead: LeadRow): OsmResearch | undefined {
 /** Extra `/contact` and `/about` pages, but only when `/` actually links to
  * them (spec §4's depth 2-3). Guessing paths is extra load on a stranger's
  * server for a URL they never published. */
-function linkedContactPages(html: string, base: URL): string[] {
-  const wanted =
-    /^\/?(?:contact|contact-us|contactus|about|about-us|aboutus)\/?$/i
-  const out: string[] = []
-  for (const match of html.matchAll(HREF_ATTRIBUTE)) {
-    const href = (match[1] ?? match[2] ?? match[3] ?? "").trim()
-    if (href.length === 0 || /^(?:mailto|tel|javascript|data):/i.test(href))
-      continue
+/** How many extra pages one site may cost us, beyond its homepage. */
+export const MAX_CONTACT_PAGES = 5
+
+/**
+ * Path segments worth a fetch, best first.
+ *
+ * Tiered because the budget above is spent in order and only one of these
+ * usually carries an address: a contact page nearly always does, an about or
+ * team page often does, a support page rarely does.
+ */
+const CONTACT_SEGMENTS: readonly (readonly string[])[] = [
+  [
+    "contact",
+    "contact-us",
+    "contactus",
+    "contact-me",
+    "email-us",
+    "emailus",
+    "get-in-touch",
+    "getintouch",
+    "reach-us",
+    "connect",
+    "enquiries",
+    "enquiry",
+    "inquiries",
+    "inquiry",
+  ],
+  [
+    "about",
+    "about-us",
+    "aboutus",
+    "team",
+    "our-team",
+    "meet-the-team",
+    "staff",
+    "people",
+    "locations",
+    "location",
+    "find-us",
+  ],
+  ["support", "help", "imprint", "impressum"],
+]
+
+/** The same idea said in a link's visible label, for sites routing through
+ * opaque ids where the path says nothing at all. */
+const CONTACT_LABELS: readonly (readonly string[])[] = [
+  [
+    "contact",
+    "contact us",
+    "contact me",
+    "email us",
+    "email me",
+    "get in touch",
+    "reach us",
+  ],
+  ["about", "about us", "our team", "meet the team", "the team", "our staff"],
+  ["support", "help"],
+]
+
+const PAGE_EXTENSION = /\.(?:html?|php|aspx?|jsp)$/i
+const ANCHOR_WITH_TEXT = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi
+const HREF_IN_ATTRS = /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
+
+/** Which tier a path falls in, or -1 for "not worth a fetch". */
+function pathTier(pathname: string): number {
+  const segments = pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) =>
+      decodeURIComponent(segment)
+        .replace(PAGE_EXTENSION, "")
+        .replace(/_/g, "-")
+        .toLowerCase()
+    )
+  // Whole segments only. "/contactlenses" is an optician's product page and
+  // "/aboutbats" is a blog post; a substring match would spend the budget on
+  // both.
+  for (let tier = 0; tier < CONTACT_SEGMENTS.length; tier++) {
+    if (segments.some((segment) => CONTACT_SEGMENTS[tier].includes(segment))) {
+      return tier
+    }
+  }
+  return -1
+}
+
+function labelTier(rawText: string): number {
+  const label = rawText
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&[a-z]+;|&#\d+;/gi, " ")
+    .replace(/[^a-z\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+  if (label.length === 0) return -1
+  for (let tier = 0; tier < CONTACT_LABELS.length; tier++) {
+    if (CONTACT_LABELS[tier].includes(label)) return tier
+  }
+  return -1
+}
+
+/**
+ * Same-site pages likely to carry a contact address, best first.
+ *
+ * Two passes on purpose. The path pass reads every `href` on the page,
+ * including anchors left unclosed, and is what finds `/en/contact` or
+ * `/pages/contact-us` — neither of which the old root-anchored pattern could
+ * see. The label pass reads the link's visible text, which is the only
+ * signal left on a site whose URLs are opaque ids.
+ */
+export function contactPageUrls(html: string, base: URL): string[] {
+  const best = new Map<string, number>()
+
+  const consider = (href: string, tier: number): void => {
+    if (tier < 0) return
+    if (href.length === 0 || /^(?:mailto|tel|javascript|data):/i.test(href)) {
+      return
+    }
     let resolved: URL
     try {
       resolved = new URL(href, base)
     } catch {
-      continue
+      return
     }
-    if (resolved.host !== base.host) continue
-    if (!wanted.test(resolved.pathname)) continue
+    if (resolved.host !== base.host) return
+    if (!/^https?:$/.test(resolved.protocol)) return
+    // A fragment and a tracking query are the same page twice.
     resolved.hash = ""
     resolved.search = ""
-    if (!out.includes(resolved.href)) out.push(resolved.href)
+    if (resolved.href === base.href) return
+    const existing = best.get(resolved.href)
+    if (existing === undefined || tier < existing) best.set(resolved.href, tier)
   }
-  return out.slice(0, 2)
+
+  for (const match of html.matchAll(HREF_ATTRIBUTE)) {
+    const href = (match[1] ?? match[2] ?? match[3] ?? "").trim()
+    let pathname: string
+    try {
+      pathname = new URL(href, base).pathname
+    } catch {
+      continue
+    }
+    consider(href, pathTier(pathname))
+  }
+
+  for (const match of html.matchAll(ANCHOR_WITH_TEXT)) {
+    const attrs = match[1] ?? ""
+    const hrefMatch = HREF_IN_ATTRS.exec(attrs)
+    if (!hrefMatch) continue
+    const href = (hrefMatch[1] ?? hrefMatch[2] ?? hrefMatch[3] ?? "").trim()
+    consider(href, labelTier(match[2] ?? ""))
+  }
+
+  // A stable sort, so within a tier the page the site links first wins.
+  return [...best.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, MAX_CONTACT_PAGES)
+    .map(([href]) => href)
+}
+
+const SITEMAP_LOC =
+  /<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)\s*(?:\]\]>)?\s*<\/loc>/gi
+
+/**
+ * The `<loc>` entries of a sitemap — or of a sitemap index, which has the
+ * same shape and points at more sitemaps.
+ *
+ * Regex rather than a parser: this reads one element out of a format that is
+ * usually machine-written, and anything unparseable is a miss rather than a
+ * throw. A 404 page served as XML is the common case and must cost nothing.
+ */
+export function parseSitemapUrls(xml: string): string[] {
+  const out: string[] = []
+  for (const match of xml.matchAll(SITEMAP_LOC)) {
+    const loc = (match[1] ?? "").trim()
+    if (/^https?:\/\//i.test(loc) && !out.includes(loc)) out.push(loc)
+  }
+  return out
+}
+
+/** A sitemap is a bonus, never load-bearing, so this many fetches at most. */
+const MAX_SITEMAP_FETCHES = 3
+
+/**
+ * Contact-ish pages the site's own sitemap knows about.
+ *
+ * Only consulted when the homepage's links did not fill the page budget,
+ * which is exactly the case it helps with: a site whose navigation is built
+ * in JavaScript has no `<a href>` for us to read, but almost always still
+ * ships a sitemap. Every failure here is swallowed — a missing or malformed
+ * sitemap is the normal case and must never cost the lead.
+ */
+async function sitemapContactUrls(
+  origin: string,
+  robots: RobotsRules,
+  deps: ResolvedDeps
+): Promise<string[]> {
+  const base = new URL(origin)
+  const queue =
+    robots.sitemaps.length > 0
+      ? [...robots.sitemaps]
+      : [`${origin}/sitemap.xml`]
+  const seen = new Set<string>()
+  const found = new Map<string, number>()
+  let fetches = 0
+
+  while (queue.length > 0 && fetches < MAX_SITEMAP_FETCHES) {
+    const next = queue.shift() as string
+    if (seen.has(next)) continue
+    seen.add(next)
+
+    let url: URL
+    try {
+      url = new URL(next)
+    } catch {
+      continue
+    }
+    // A robots.txt may advertise anyone's sitemap; only this site's counts,
+    // and `fetchHtml` still runs it through the SSRF guard either way.
+    if (url.host !== base.host) continue
+    if (!robots.allows(url.pathname)) continue
+
+    fetches++
+    if (robots.crawlDelayMs > 0) await deps.sleep(robots.crawlDelayMs)
+    let xml: string
+    try {
+      xml = (await fetchHtml(url.href, deps, "xml")).html
+    } catch {
+      continue
+    }
+
+    for (const loc of parseSitemapUrls(xml)) {
+      let locUrl: URL
+      try {
+        locUrl = new URL(loc)
+      } catch {
+        continue
+      }
+      if (locUrl.host !== base.host) continue
+      // A sitemap index points at more sitemaps; one more level is plenty.
+      if (/\.xml(?:\.gz)?$/i.test(locUrl.pathname)) {
+        queue.push(locUrl.href)
+        continue
+      }
+      const tier = pathTier(locUrl.pathname)
+      if (tier < 0) continue
+      locUrl.hash = ""
+      locUrl.search = ""
+      const existing = found.get(locUrl.href)
+      if (existing === undefined || tier < existing) {
+        found.set(locUrl.href, tier)
+      }
+    }
+  }
+
+  return [...found.entries()].sort((a, b) => a[1] - b[1]).map(([href]) => href)
 }
 
 const FACT_SYSTEM_PROMPT = `You extract ONE concrete, verifiable fact about a small business from the text of its own website, so a human can mention it in a short introductory email.
@@ -2130,7 +2397,19 @@ export async function enrichLead(
     fetched.push(home)
     research.pages.push(home.record)
 
-    for (const extra of linkedContactPages(home.html, new URL(home.url))) {
+    const extras = contactPageUrls(home.html, new URL(home.url))
+    if (extras.length < MAX_CONTACT_PAGES) {
+      for (const fromSitemap of await sitemapContactUrls(
+        origin,
+        robots,
+        resolved
+      )) {
+        if (extras.length >= MAX_CONTACT_PAGES) break
+        if (!extras.includes(fromSitemap)) extras.push(fromSitemap)
+      }
+    }
+
+    for (const extra of extras) {
       let extraUrl: URL
       try {
         extraUrl = new URL(extra)

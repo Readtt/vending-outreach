@@ -19,10 +19,14 @@ const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-leads-test-"))
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
+  contactPageUrls,
   deobfuscateEmailText,
   extractEncodedEmails,
   findLocations,
+  MAX_CONTACT_PAGES,
+  parseSitemapUrls,
 } from "./leads.ts"
+import { parseRobots } from "./leads.ts"
 import { closeDb, getDb, insertLead } from "./db.ts"
 
 assert.ok(
@@ -305,4 +309,151 @@ test("deobfuscation leaves ordinary prose alone", () => {
   // manufacture addresses out of copy that never had one.
   const prose = "Open at 9. We are at the corner of Kingston and Morningside."
   assert.equal(deobfuscateEmailText(prose), prose)
+})
+
+// ---------------------------------------------------------------------------
+// Finding the page the address is on
+// ---------------------------------------------------------------------------
+
+const BASE = new URL("https://guildwoodgym.ca/")
+
+function link(href: string, text = "Link"): string {
+  return `<a href="${href}">${text}</a>`
+}
+
+test("a contact link is found however the site spells the path", () => {
+  // The old pattern was anchored to the site root, so every one of these —
+  // all ordinary ways to build a site — was invisible.
+  const paths = [
+    "/contact",
+    "/contact/",
+    "/contact.html",
+    "/contact.php",
+    "/contact-us",
+    "/contact_us",
+    "/en/contact",
+    "/pages/contact-us",
+    "/about/team",
+    "/get-in-touch",
+    "/our-team",
+    "/locations",
+  ]
+  for (const path of paths) {
+    const found = contactPageUrls(link(path), BASE)
+    assert.deepEqual(
+      found,
+      [new URL(path, BASE).href],
+      `${path} should be worth a look`
+    )
+  }
+})
+
+test("a word merely containing 'contact' or 'about' is not a contact page", () => {
+  // /contactlenses is an optician's product page, not a contact page. Matching
+  // on substrings would spend the page budget on it.
+  for (const path of ["/contactlenses", "/aboutbats", "/shop/teams-kit"]) {
+    assert.deepEqual(contactPageUrls(link(path), BASE), [], path)
+  }
+})
+
+test("a link is followed on its text when the path says nothing", () => {
+  // Plenty of sites route through opaque ids. The visible label is the only
+  // thing that says where the link goes.
+  const html = link("/p/9f2c", "Contact Us") + link("/p/1a1a", "Email us")
+
+  assert.deepEqual(contactPageUrls(html, BASE), [
+    "https://guildwoodgym.ca/p/9f2c",
+    "https://guildwoodgym.ca/p/1a1a",
+  ])
+})
+
+test("contact pages outrank about pages", () => {
+  // Both are worth fetching; only one usually carries the address, and the
+  // page budget is spent in order.
+  const html = link("/about") + link("/contact")
+
+  assert.deepEqual(contactPageUrls(html, BASE), [
+    "https://guildwoodgym.ca/contact",
+    "https://guildwoodgym.ca/about",
+  ])
+})
+
+test("off-site, mailto and duplicate links are left out", () => {
+  const html =
+    link("https://facebook.com/contact") +
+    link("mailto:hi@guildwoodgym.ca") +
+    link("/contact") +
+    link("/contact#form") +
+    link("/contact?utm_source=x")
+
+  assert.deepEqual(contactPageUrls(html, BASE), [
+    "https://guildwoodgym.ca/contact",
+  ])
+})
+
+test(`no more than ${MAX_CONTACT_PAGES} pages are ever queued`, () => {
+  const html = [
+    "/contact",
+    "/contact-us",
+    "/about",
+    "/about-us",
+    "/team",
+    "/staff",
+    "/locations",
+    "/support",
+  ]
+    .map((p) => link(p))
+    .join("")
+
+  assert.equal(contactPageUrls(html, BASE).length, MAX_CONTACT_PAGES)
+})
+
+test("robots.txt Sitemap: lines are collected", () => {
+  const rules = parseRobots(
+    [
+      "User-agent: *",
+      "Disallow: /admin",
+      "Sitemap: https://guildwoodgym.ca/sitemap.xml",
+      "sitemap: https://guildwoodgym.ca/sitemap-pages.xml",
+    ].join("\n")
+  )
+
+  assert.deepEqual(rules.sitemaps, [
+    "https://guildwoodgym.ca/sitemap.xml",
+    "https://guildwoodgym.ca/sitemap-pages.xml",
+  ])
+  // The rest of robots.txt must still be understood.
+  assert.equal(rules.allows("/admin"), false)
+  assert.equal(rules.allows("/contact"), true)
+})
+
+test("a sitemap yields its urls", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://guildwoodgym.ca/</loc></url>
+      <url><loc>https://guildwoodgym.ca/contact-us/</loc></url>
+      <url><loc><![CDATA[https://guildwoodgym.ca/about]]></loc></url>
+    </urlset>`
+
+  assert.deepEqual(parseSitemapUrls(xml), [
+    "https://guildwoodgym.ca/",
+    "https://guildwoodgym.ca/contact-us/",
+    "https://guildwoodgym.ca/about",
+  ])
+})
+
+test("a sitemap index yields the sitemaps it points at", () => {
+  const xml = `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <sitemap><loc>https://guildwoodgym.ca/sitemap-1.xml</loc></sitemap>
+    </sitemapindex>`
+
+  assert.deepEqual(parseSitemapUrls(xml), [
+    "https://guildwoodgym.ca/sitemap-1.xml",
+  ])
+})
+
+test("rubbish where a sitemap should be yields nothing, never a throw", () => {
+  for (const junk of ["", "<html><body>404</body></html>", "not xml at all"]) {
+    assert.deepEqual(parseSitemapUrls(junk), [], JSON.stringify(junk))
+  }
 })
