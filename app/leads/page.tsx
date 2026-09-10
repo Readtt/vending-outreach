@@ -5,7 +5,12 @@ import { getTargetingSettings } from "../settings/data"
 import { ApprovalBanner } from "./approval-banner"
 import { FindLocationsDialog } from "./find-locations-dialog"
 import { LeadTable } from "./lead-table"
-import { getBusinessTypeOptions, getLeadListData } from "./data"
+import { RetryAbandonedButton } from "./retry-abandoned-button"
+import {
+  getAbandonedCount,
+  getBusinessTypeOptions,
+  getLeadListData,
+} from "./data"
 
 // Reads the local SQLite DB directly on every request — see app/settings/page.tsx.
 export const dynamic = "force-dynamic"
@@ -15,6 +20,7 @@ export default function LeadsPage() {
   const typeOptions = getBusinessTypeOptions()
   const heldCount = countLeads({ status: ["held"] })
   const targeting = getTargetingSettings()
+  const abandoned = getAbandonedCount()
 
   return (
     <Page width="full">
@@ -23,7 +29,13 @@ export default function LeadsPage() {
         title="Leads"
         description="Every business found so far, and what has happened with each one."
         action={
-          <FindLocationsDialog typeOptions={typeOptions} defaults={targeting} />
+          <div className="flex flex-wrap items-center gap-2">
+            <RetryAbandonedButton count={abandoned} />
+            <FindLocationsDialog
+              typeOptions={typeOptions}
+              defaults={targeting}
+            />
+          </div>
         }
       />
 

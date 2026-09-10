@@ -6,6 +6,7 @@
  */
 
 import { countLeads, listLeads } from "@/lib/db"
+import { abandonedLeads } from "@/lib/leads"
 import { shortLocation } from "@/lib/format"
 import { TARGET_TYPES, TYPE_LABELS, type LeadType } from "@/lib/osm"
 import type { BusinessTypeOption, LeadListItem } from "./types"
@@ -51,4 +52,9 @@ function typeLabel(type: string | null): string | null {
 
 export function getBusinessTypeOptions(): BusinessTypeOption[] {
   return TARGET_TYPES.map((id) => ({ id, label: TYPE_LABELS[id] }))
+}
+
+/** How many leads `retryAbandonedLeadsAction` would pick up right now. */
+export function getAbandonedCount(): number {
+  return abandonedLeads().length
 }

@@ -20,7 +20,12 @@ import {
   updateLead,
 } from "@/lib/db"
 import { isCountry } from "@/lib/geo"
-import { findLocations, importCandidates } from "@/lib/leads"
+import {
+  abandonedLeads,
+  findLocations,
+  importCandidates,
+  resetAbandonedLeads,
+} from "@/lib/leads"
 import { TARGET_TYPES, type LeadType, type OsmCandidate } from "@/lib/osm"
 import { humanizeEvent } from "../humanize-event"
 import type { FindLocationsFormResult, LeadDetail } from "./types"
@@ -207,4 +212,32 @@ export async function approveAllHeldAction(): Promise<{ approved: number }> {
 /** How many drafts are parked waiting for a human. Drives the review banner. */
 export async function countHeldAction(): Promise<number> {
   return countLeads({ status: ["held"] })
+}
+
+/**
+ * Enriches again every lead that was given up on for a reason that has since
+ * stopped applying.
+ *
+ * A lead is written off once, permanently, by whatever the code did on the
+ * day it ran — so widening where addresses are looked for, or making a phone
+ * number an outcome of its own, reaches nothing already on the list. This is
+ * what asks again. Cheap for most of them: a lead with no website at all
+ * finishes without a single fetch.
+ */
+export async function retryAbandonedLeadsAction(): Promise<{
+  requeued: number
+}> {
+  const leadIds = resetAbandonedLeads()
+  for (const leadId of leadIds) {
+    enqueue("enrich", { leadId })
+  }
+  revalidatePath("/leads")
+  revalidatePath("/calls")
+  revalidatePath("/")
+  return { requeued: leadIds.length }
+}
+
+/** How many leads that button would pick up. Drives whether it is shown. */
+export async function countAbandonedLeadsAction(): Promise<number> {
+  return abandonedLeads().length
 }

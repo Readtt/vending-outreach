@@ -47,6 +47,7 @@ import {
   getLeadById,
   insertLead,
   isSuppressed,
+  listLeads,
   logEvent,
   setCachedFetch,
   updateLead,
@@ -1841,6 +1842,86 @@ export function importCandidates(
     detail: { inserted, skipped, total: candidates.length },
   })
   return { inserted, skipped, leadIds }
+}
+
+// ---------------------------------------------------------------------------
+// Retrying the ones we gave up on
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcomes that mean "we could not reach them", rather than "we looked and
+ * judged".
+ *
+ * These are the ones worth another go when the rules change underneath them:
+ * a lead is written off once, permanently, by whatever the code did on the
+ * day it ran, and nothing revisits it. Widening where addresses are looked
+ * for, or making a phone number an outcome in its own right, reaches none of
+ * the leads already on the list unless something asks again.
+ *
+ * `low_score` is left out: that was a judgement on evidence we had, and
+ * re-running it reaches the same number. `suppressed` is left out because it
+ * is a decision by the recipient, and no rule change on this side may
+ * reconsider it.
+ */
+export const RETRYABLE_OUTCOMES: ReadonlySet<UnqualifiedReason> = new Set([
+  "no_website",
+  "unreachable",
+  "robots_disallowed",
+  "no_email",
+  "email_rejected",
+  "no_mx",
+  "no_fact",
+])
+
+/** Reads back the reason `enrichLead` recorded, e.g. "unqualified:no_email". */
+function retryableReason(lead: LeadRow): boolean {
+  if (!lead.research_json) return false
+  let outcome: unknown
+  try {
+    outcome = (JSON.parse(lead.research_json) as { outcome?: unknown }).outcome
+  } catch {
+    return false
+  }
+  if (typeof outcome !== "string") return false
+  const reason = outcome.slice(outcome.indexOf(":") + 1)
+  return RETRYABLE_OUTCOMES.has(reason as UnqualifiedReason)
+}
+
+/** Leads that would be worth enriching again under the rules as they stand. */
+export function abandonedLeads(): LeadRow[] {
+  return listLeads({
+    status: ["unqualified", "enriching"],
+    limit: 100_000,
+  }).filter(
+    (lead) =>
+      // A lead stuck mid-enrichment has no outcome to read: its task died
+      // before writing one. Before the engine learned to release those, it
+      // was the permanent state of anything whose model call kept failing.
+      lead.status === "enriching" || retryableReason(lead)
+  )
+}
+
+/**
+ * Puts those leads back to `new` so they can be enriched again, and returns
+ * the ids. Enqueues nothing — the worker owns the task queue, same division
+ * as `importCandidates`.
+ */
+export function resetAbandonedLeads(): string[] {
+  const leads = abandonedLeads()
+  if (leads.length === 0) return []
+
+  const db = getDb()
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    for (const lead of leads) updateLead(lead.id, { status: "new" })
+    db.exec("COMMIT")
+  } catch (err) {
+    db.exec("ROLLBACK")
+    throw err
+  }
+
+  logEvent("leads.retrying", { detail: { count: leads.length } })
+  return leads.map((lead) => lead.id)
 }
 
 // ---------------------------------------------------------------------------

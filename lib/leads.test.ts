@@ -19,8 +19,10 @@ const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "vending-leads-test-"))
 process.env.VENDING_DB_PATH = path.join(TMP_ROOT, "app.db")
 
 import {
+  abandonedLeads,
   contactPageUrls,
   enrichLead,
+  resetAbandonedLeads,
   deobfuscateEmailText,
   extractEncodedEmails,
   findLocations,
@@ -659,4 +661,90 @@ test("a fact the page does not contain is still thrown away", async () => {
 
   assert.ok(outcome.status === "ready" || outcome.status === "held")
   assert.equal(getLeadById(lead.id)?.personalization_fact, null)
+})
+
+// ---------------------------------------------------------------------------
+// Asking again about the ones we gave up on
+// ---------------------------------------------------------------------------
+
+/** A lead written off with the reason `enrichLead` would have recorded. */
+function abandoned(
+  name: string,
+  osmId: string,
+  outcome: string,
+  status = "unqualified"
+) {
+  const lead = insertLead({ name, type: "gym", source: "osm", osmId })
+  getDb()
+    .prepare(`UPDATE leads SET status = ?, research_json = ? WHERE id = ?`)
+    .run(status, JSON.stringify({ outcome }), lead.id)
+  return lead
+}
+
+test("leads we could not reach are worth asking about again", () => {
+  getDb().exec("DELETE FROM leads")
+  const wanted = [
+    abandoned("No Site", "node/800", "unqualified:no_website"),
+    abandoned("No Address", "node/801", "unqualified:no_email"),
+    abandoned("Site Down", "node/802", "unqualified:unreachable"),
+    abandoned("Bad Address", "node/803", "unqualified:email_rejected"),
+    abandoned("Nothing To Quote", "node/804", "unqualified:no_fact"),
+  ]
+
+  assert.deepEqual(
+    abandonedLeads()
+      .map((l) => l.id)
+      .sort(),
+    wanted.map((l) => l.id).sort()
+  )
+})
+
+test("a judgement we made on evidence is not reopened", () => {
+  // We looked, we scored, we said no. Running it again reaches the same
+  // number, so the button would just churn.
+  getDb().exec("DELETE FROM leads")
+  abandoned("Scored Low", "node/810", "unqualified:low_score")
+  abandoned("Asked Us To Stop", "node/811", "unqualified:suppressed")
+
+  assert.deepEqual(abandonedLeads(), [])
+})
+
+test("a lead already emailed is never dragged back to the start", () => {
+  getDb().exec("DELETE FROM leads")
+  abandoned("Already Emailed", "node/820", "ready", "contacted")
+  abandoned("On The Call List", "node/821", "to_call:no_website", "to_call")
+
+  assert.deepEqual(abandonedLeads(), [])
+})
+
+test("a lead stranded mid-research is picked up even with no outcome", () => {
+  // It has no outcome to read: the task died before writing one.
+  getDb().exec("DELETE FROM leads")
+  const stuck = insertLead({
+    name: "Storwell Self Storage",
+    type: "storage",
+    source: "osm",
+    osmId: "node/830",
+  })
+  getDb()
+    .prepare(`UPDATE leads SET status = 'enriching' WHERE id = ?`)
+    .run(stuck.id)
+
+  assert.deepEqual(
+    abandonedLeads().map((l) => l.id),
+    [stuck.id]
+  )
+})
+
+test("resetting sends them back to new and reports which", () => {
+  getDb().exec("DELETE FROM leads")
+  const a = abandoned("No Site", "node/840", "unqualified:no_website")
+  abandoned("Scored Low", "node/841", "unqualified:low_score")
+
+  const ids = resetAbandonedLeads()
+
+  assert.deepEqual(ids, [a.id])
+  assert.equal(getLeadById(a.id)?.status, "new")
+  // And a second press finds nothing left to do.
+  assert.deepEqual(resetAbandonedLeads(), [])
 })
